@@ -176,14 +176,21 @@ class ZImageModel(BaseModel):
         # transformer = ZImageTransformer2DModel.from_pretrained(
         #     transformer_path, subfolder=transformer_subfolder, torch_dtype=dtype
         # )
+        # transformer_load_kwargs = {
+        #     "torch_dtype": dtype,
+        #     "offload_state_dict": load_cfg.get("offload_state_dict", True),
+        #     "offload_folder": os.path.join(load_offload_dir, "transformer"),
+        # }
+
+        # if load_cfg.get("force_low_cpu_mem_usage", False):
+        #     transformer_load_kwargs["low_cpu_mem_usage"] = True
+        # 교체 2
         transformer_load_kwargs = {
             "torch_dtype": dtype,
             "offload_state_dict": load_cfg.get("offload_state_dict", True),
             "offload_folder": os.path.join(load_offload_dir, "transformer"),
+            "low_cpu_mem_usage": load_cfg.get("transformer_low_cpu_mem_usage", False),
         }
-
-        if load_cfg.get("force_low_cpu_mem_usage", False):
-            transformer_load_kwargs["low_cpu_mem_usage"] = True
 
         transformer = ZImageTransformer2DModel.from_pretrained(
             transformer_path,
@@ -218,19 +225,19 @@ class ZImageModel(BaseModel):
         #             transformer.cap_pad_token,
         #         ]
         #     )
-        # 두번째 교체
-        use_transformer_mm = (
-            self.model_config.layer_offloading
-            and self.model_config.layer_offloading_text_encoder_percent > 0
-            and not load_cfg.get("disable_text_encoder_memory_manager", True)
-        )
+        # ~~두번째 교체~~ -> 삭제
+        # use_transformer_mm = (
+        #     self.model_config.layer_offloading
+        #     and self.model_config.layer_offloading_text_encoder_percent > 0
+        #     and not load_cfg.get("disable_text_encoder_memory_manager", True)
+        # )
 
-        if use_transformer_mm:
-            MemoryManager.attach(
-                text_encoder,
-                self.device_torch,
-                offload_percent=self.model_config.layer_offloading_text_encoder_percent,
-            )
+        # if use_transformer_mm:
+        #     MemoryManager.attach(
+        #         text_encoder,
+        #         self.device_torch,
+        #         offload_percent=self.model_config.layer_offloading_text_encoder_percent,
+        #     )
         #endregion
 
         if self.model_config.low_vram:
@@ -248,6 +255,13 @@ class ZImageModel(BaseModel):
         # text_encoder = Qwen3ForCausalLM.from_pretrained(
         #     base_model_path, subfolder="text_encoder", torch_dtype=dtype
         # )
+        # te_load_kwargs = {
+        #     "torch_dtype": dtype,
+        #     "offload_state_dict": load_cfg.get("offload_state_dict", True),
+        #     "offload_folder": os.path.join(load_offload_dir, "text_encoder"),
+        #     "low_cpu_mem_usage": load_cfg.get("te_low_cpu_mem_usage", True),
+        # }
+        # 교체 2
         te_load_kwargs = {
             "torch_dtype": dtype,
             "offload_state_dict": load_cfg.get("offload_state_dict", True),
@@ -313,6 +327,13 @@ class ZImageModel(BaseModel):
 
         # leave it on cpu for now
         if not self.low_vram:
+            #region 디버깅 편의성
+            if any(getattr(p, "is_meta", False) for p in pipe.transformer.parameters()):
+                raise RuntimeError(
+                    "Transformer still has meta tensors after load. "
+                    "Try model_kwargs.transformer_low_cpu_mem_usage = false."
+                )
+            #endregion
             pipe.transformer = pipe.transformer.to(self.device_torch)
 
         flush()
