@@ -108,7 +108,7 @@ class BaseSDTrainProcess(BaseTrainProcess):
             self.network_config = None
         self.train_config = TrainConfig(**self.get_conf('train', {}))
         model_config = self.get_conf('model', {})
-        self.modules_being_trained: List[torch.nn.Module] = []
+        self.modules_being_trained: List[torch.nn.Module] = [self.sd.unet]
 
         # update modelconfig dtype to match train
         model_config['dtype'] = self.train_config.dtype
@@ -719,16 +719,27 @@ class BaseSDTrainProcess(BaseTrainProcess):
     def sample_step_hook(self, img_num, total_imgs):
         pass
     
+    #region 수정됨
     def prepare_accelerator(self):
-        # set some config
-        self.accelerator.even_batches=False
-        
-        # # prepare all the models stuff for accelerator (hopefully we dont miss any)
-        self.sd.vae = self.accelerator.prepare(self.sd.vae)
+        self.accelerator.even_batches = False
+
+        is_zimage_lora_cached = (
+            self.model_config.arch == "zimage"
+            and self.network is not None
+            and self.is_latents_cached
+        )
+
+        # VAE는 latent cache가 끝난 뒤 학습 준비 단계에서는 굳이 prepare하지 않음
+        if not is_zimage_lora_cached:
+            if self.sd.vae is not None:
+                print_acc("prepare_accelerator: vae")
+                self.sd.vae = self.accelerator.prepare(self.sd.vae)
+
         if self.sd.unet is not None:
+            print_acc("prepare_accelerator: unet")
             self.sd.unet = self.accelerator.prepare(self.sd.unet)
-            # todo always tdo it?
             self.modules_being_trained.append(self.sd.unet)
+
         if self.sd.text_encoder is not None and self.train_config.train_text_encoder:
             if isinstance(self.sd.text_encoder, list):
                 self.sd.text_encoder = [self.accelerator.prepare(model) for model in self.sd.text_encoder]
@@ -736,26 +747,25 @@ class BaseSDTrainProcess(BaseTrainProcess):
             else:
                 self.sd.text_encoder = self.accelerator.prepare(self.sd.text_encoder)
                 self.modules_being_trained.append(self.sd.text_encoder)
+
         if self.sd.refiner_unet is not None and self.train_config.train_refiner:
+            print_acc("prepare_accelerator: refiner_unet")
             self.sd.refiner_unet = self.accelerator.prepare(self.sd.refiner_unet)
             self.modules_being_trained.append(self.sd.refiner_unet)
-        # todo, do we need to do the network or will "unet" get it?
-        if self.sd.network is not None:
+
+        # Z-Image LoRA에서는 network를 따로 prepare하지 않음
+        if self.sd.network is not None and not is_zimage_lora_cached:
+            print_acc("prepare_accelerator: network")
             self.sd.network = self.accelerator.prepare(self.sd.network)
             self.modules_being_trained.append(self.sd.network)
-        if self.adapter is not None and self.adapter_config.train:
-            # todo adapters may not be a module. need to check
-            self.adapter = self.accelerator.prepare(self.adapter)
-            self.modules_being_trained.append(self.adapter)
-        
-        # prepare other things
+
+        print_acc("prepare_accelerator: optimizer")
         self.optimizer = self.accelerator.prepare(self.optimizer)
+
         if self.lr_scheduler is not None:
+            print_acc("prepare_accelerator: lr_scheduler")
             self.lr_scheduler = self.accelerator.prepare(self.lr_scheduler)
-        # self.data_loader = self.accelerator.prepare(self.data_loader)
-        # if self.data_loader_reg is not None:
-        #     self.data_loader_reg = self.accelerator.prepare(self.data_loader_reg)
-            
+    #endregion
 
     def ensure_params_requires_grad(self, force=False):
         if self.train_config.do_paramiter_swapping and not force:
