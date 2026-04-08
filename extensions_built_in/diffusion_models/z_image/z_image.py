@@ -152,7 +152,7 @@ class ZImageModel(BaseModel):
         load_cfg = self.model_config.model_kwargs or {}
         load_offload_dir = load_cfg.get("load_offload_dir", "/content/aitk_load_offload")
         os.makedirs(load_offload_dir, exist_ok=True)
-        #endreigon
+        #endregion
         
         dtype = self.torch_dtype
         self.print_and_status_update("Loading ZImage model")
@@ -389,9 +389,24 @@ class ZImageModel(BaseModel):
 
         return noise_pred
 
+    #region 교체
+    # def get_prompt_embeds(self, prompt: str) -> PromptEmbeds:
+    #     if self.pipeline.text_encoder.device != self.device_torch:
+    #         self.pipeline.text_encoder.to(self.device_torch)
+
+    #     prompt_embeds, _ = self.pipeline.encode_prompt(
+    #         prompt,
+    #         do_classifier_free_guidance=False,
+    #         device=self.device_torch,
+    #     )
+    #     pe = PromptEmbeds([prompt_embeds, None])
+    #     return pe
     def get_prompt_embeds(self, prompt: str) -> PromptEmbeds:
+        moved_to_gpu = False
+
         if self.pipeline.text_encoder.device != self.device_torch:
             self.pipeline.text_encoder.to(self.device_torch)
+            moved_to_gpu = True
 
         prompt_embeds, _ = self.pipeline.encode_prompt(
             prompt,
@@ -399,7 +414,13 @@ class ZImageModel(BaseModel):
             device=self.device_torch,
         )
         pe = PromptEmbeds([prompt_embeds, None])
+
+        if moved_to_gpu and self.model_config.low_vram:
+            self.pipeline.text_encoder.to("cpu")
+            flush()
+
         return pe
+    #endregion
 
     def get_model_has_grad(self):
         return False
