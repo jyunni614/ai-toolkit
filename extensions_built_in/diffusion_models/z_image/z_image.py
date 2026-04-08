@@ -234,8 +234,9 @@ class ZImageModel(BaseModel):
         #endregion
 
         if self.model_config.low_vram:
-            self.print_and_status_update("Moving transformer to CPU")
-            transformer.to("cpu")
+            self.print_and_status_update(
+                "Skipping transformer.to('cpu') because low_vram is incompatible with meta-tensor loading path"
+            )
 
         flush()
 
@@ -322,7 +323,9 @@ class ZImageModel(BaseModel):
         # text_encoder[0].eval()
         text_encoder[0].requires_grad_(False)
         text_encoder[0].eval()
-        text_encoder[0].to("cpu")
+        _has_meta_tensors = lambda module: any(getattr(p, "is_meta", False) for p in module.parameters())
+        if not _has_meta_tensors(text_encoder[0]):
+            text_encoder[0].to("cpu")
         #endregion
         flush()
 
