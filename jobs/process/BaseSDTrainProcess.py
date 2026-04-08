@@ -719,11 +719,9 @@ class BaseSDTrainProcess(BaseTrainProcess):
     def sample_step_hook(self, img_num, total_imgs):
         pass
     
-    #region 수정 v2
+    #region 수정 v3
     def prepare_accelerator(self):
         self.accelerator.even_batches = False
-
-        # 여기서 초기화해야 함. __init__에서 self.sd 없을 때 만지면 안 됨.
         self.modules_being_trained = []
 
         is_zimage_lora_cached = (
@@ -732,10 +730,15 @@ class BaseSDTrainProcess(BaseTrainProcess):
             and self.is_latents_cached
         )
 
-        if not is_zimage_lora_cached:
-            if self.sd.vae is not None:
-                print_acc("prepare_accelerator: vae")
-                self.sd.vae = self.accelerator.prepare(self.sd.vae)
+        if is_zimage_lora_cached:
+            print_acc("prepare_accelerator: bypassing accelerate.prepare for zimage cached lora")
+            if self.sd.unet is not None:
+                self.modules_being_trained.append(self.sd.unet)
+            return
+
+        if self.sd.vae is not None:
+            print_acc("prepare_accelerator: vae")
+            self.sd.vae = self.accelerator.prepare(self.sd.vae)
 
         if self.sd.unet is not None:
             print_acc("prepare_accelerator: unet")
@@ -755,14 +758,10 @@ class BaseSDTrainProcess(BaseTrainProcess):
             self.sd.refiner_unet = self.accelerator.prepare(self.sd.refiner_unet)
             self.modules_being_trained.append(self.sd.refiner_unet)
 
-        if self.sd.network is not None and not is_zimage_lora_cached:
+        if self.sd.network is not None:
             print_acc("prepare_accelerator: network")
             self.sd.network = self.accelerator.prepare(self.sd.network)
             self.modules_being_trained.append(self.sd.network)
-
-        if is_zimage_lora_cached:
-            print_acc("prepare_accelerator: skipping optimizer/lr_scheduler for zimage cached lora")
-            return
 
         print_acc("prepare_accelerator: optimizer")
         self.optimizer = self.accelerator.prepare(self.optimizer)
@@ -770,7 +769,7 @@ class BaseSDTrainProcess(BaseTrainProcess):
         if self.lr_scheduler is not None:
             print_acc("prepare_accelerator: lr_scheduler")
             self.lr_scheduler = self.accelerator.prepare(self.lr_scheduler)
-            
+
         print_acc("prepare_accelerator: done")
     #endregion
 
