@@ -1613,11 +1613,45 @@ class BaseSDTrainProcess(BaseTrainProcess):
         
         self.hook_after_sd_init_before_load()
         # run base sd process run
-        self.sd.load_model()
+        #region 변경
+        # self.sd.load_model()
+        use_zimage_cache_bootstrap = (
+            self.model_config.arch == "zimage"
+            and (
+                self.datasets is not None or self.datasets_reg is not None
+            )
+            and any(
+                d.cache_latents or d.cache_latents_to_disk or d.cache_text_embeddings
+                for d in self.dataset_configs
+            )
+        )
+
+        if use_zimage_cache_bootstrap:
+            self.sd.load_model(cache_only=True)
+        else:
+            self.sd.load_model()
+        #endregion
         
         self.sd.add_after_sample_image_hook(self.sample_step_hook)
 
         dtype = get_torch_dtype(self.train_config.dtype)
+        
+        #region 이동
+        self.before_dataset_load()
+
+        if self.datasets is not None:
+            self.data_loader = get_dataloader_from_datasets(
+                self.datasets, self.train_config.batch_size, self.sd
+            )
+
+        if self.datasets_reg is not None:
+            self.data_loader_reg = get_dataloader_from_datasets(
+                self.datasets_reg, self.train_config.batch_size, self.sd
+            )
+
+        if use_zimage_cache_bootstrap:
+            self.sd.load_transformer_for_training()
+        #endregion
 
         # model is loaded from BaseSDProcess
         unet = self.sd.unet
@@ -2031,15 +2065,6 @@ class BaseSDTrainProcess(BaseTrainProcess):
             **lr_scheduler_params
         )
         self.lr_scheduler = lr_scheduler
-
-        ### HOOk ###
-        self.before_dataset_load()
-        # load datasets if passed in the root process
-        if self.datasets is not None:
-            self.data_loader = get_dataloader_from_datasets(self.datasets, self.train_config.batch_size, self.sd)
-        if self.datasets_reg is not None:
-            self.data_loader_reg = get_dataloader_from_datasets(self.datasets_reg, self.train_config.batch_size,
-                                                                self.sd)
 
         flush()
         self.last_save_step = self.step_num
