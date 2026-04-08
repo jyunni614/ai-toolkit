@@ -204,19 +204,34 @@ class ZImageModel(BaseModel):
             quantize_model(self, transformer)
             flush()
 
-        if (
+        #region 교체
+        # if (
+        #     self.model_config.layer_offloading
+        #     and self.model_config.layer_offloading_transformer_percent > 0
+        # ):
+        #     MemoryManager.attach(
+        #         transformer,
+        #         self.device_torch,
+        #         offload_percent=self.model_config.layer_offloading_transformer_percent,
+        #         ignore_modules=[
+        #             transformer.x_pad_token,
+        #             transformer.cap_pad_token,
+        #         ]
+        #     )
+        # 두번째 교체
+        use_transformer_mm = (
             self.model_config.layer_offloading
-            and self.model_config.layer_offloading_transformer_percent > 0
-        ):
+            and self.model_config.layer_offloading_text_encoder_percent > 0
+            and not load_cfg.get("disable_text_encoder_memory_manager", True)
+        )
+
+        if use_transformer_mm:
             MemoryManager.attach(
-                transformer,
+                text_encoder,
                 self.device_torch,
-                offload_percent=self.model_config.layer_offloading_transformer_percent,
-                ignore_modules=[
-                    transformer.x_pad_token,
-                    transformer.cap_pad_token,
-                ]
+                offload_percent=self.model_config.layer_offloading_text_encoder_percent,
             )
+        #endregion
 
         if self.model_config.low_vram:
             self.print_and_status_update("Moving transformer to CPU")
