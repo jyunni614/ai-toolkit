@@ -22,6 +22,7 @@ from transformers import AutoTokenizer, Qwen3ForCausalLM
 from diffusers import AutoencoderKL
 #region 추가
 import gc
+import traceback
 #endregion
 
 try:
@@ -231,6 +232,9 @@ class ZImageModel(BaseModel):
         )
 
     def ensure_text_encoder_loaded(self):
+        print("DEBUG: ensure_text_encoder_loaded() called", flush=True)
+        traceback.print_stack(limit=12)
+        
         if self._has_real_text_encoder():
             return
 
