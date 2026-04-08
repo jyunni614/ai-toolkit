@@ -326,15 +326,11 @@ class ZImageModel(BaseModel):
         tokenizer = [pipe.tokenizer]
 
         # leave it on cpu for now
-        if not self.low_vram:
-            #region 디버깅 편의성
-            if any(getattr(p, "is_meta", False) for p in pipe.transformer.parameters()):
-                raise RuntimeError(
-                    "Transformer still has meta tensors after load. "
-                    "Try model_kwargs.transformer_low_cpu_mem_usage = false."
-                )
-            #endregion
-            pipe.transformer = pipe.transformer.to(self.device_torch)
+        #region 교체
+        # if not self.low_vram:
+        #     pipe.transformer = pipe.transformer.to(self.device_torch)
+        pipe.transformer = transformer
+        #endregion
 
         flush()
         # just to make sure everything is on the right device and dtype
@@ -440,34 +436,29 @@ class ZImageModel(BaseModel):
     #     )
     #     pe = PromptEmbeds([prompt_embeds, None])
     #     return pe
-    # 교체 v2
+    # 교체 v3
     def get_prompt_embeds(self, prompt: str) -> PromptEmbeds:
-        # model_kwargs.force_cpu_text_encoder: true 면
-        # text encoder를 GPU로 올리지 않고 CPU에서 임베딩 생성
-        force_cpu_te = self.model_config.model_kwargs.get("force_cpu_text_encoder", True)
+        # 프롬프트 인코딩 단계에서는 transformer가 GPU에 있을 필요가 없음
+        if self.pipeline.transformer.device == self.device_torch:
+            self.pipeline.transformer.to("cpu")
+            flush()
 
-        target_device = torch.device("cpu") if force_cpu_te else self.device_torch
-        moved = False
-
-        if self.pipeline.text_encoder.device != target_device:
-            self.pipeline.text_encoder.to(target_device)
-            moved = True
+        if self.pipeline.text_encoder.device != self.device_torch:
+            self.pipeline.text_encoder.to(self.device_torch)
             flush()
 
         prompt_embeds, _ = self.pipeline.encode_prompt(
             prompt,
             do_classifier_free_guidance=False,
-            device=target_device,
+            device=self.device_torch,
         )
 
-        # CPU 경로면 그대로 CPU 텐서로 두는 게 안전함
-        # 나중에 학습 코드가 필요할 때 GPU로 옮기게 둔다.
-        pe = PromptEmbeds([prompt_embeds, None])
+        # 캐시/준비 단계 끝나면 text encoder 다시 CPU로 내림
+        self.pipeline.text_encoder.to("cpu")
+        flush()
 
-        if not force_cpu_te and moved and self.model_config.low_vram:
-            self.pipeline.text_encoder.to("cpu")
-            flush()
-
+        # GPU 메모리도 바로 비워주기
+        pe = PromptEmbeds([prompt_embeds.to("cpu"), None])
         return pe
     #endregion
 

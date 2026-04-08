@@ -2036,8 +2036,7 @@ class TextEmbeddingCachingMixin:
                 if not os.path.exists(text_embedding_path):
                     # load if not loaded
                     if not did_move:
-                        # 수정
-                        # self.sd.set_device_state_preset('cache_text_encoder')
+                        self.sd.set_device_state_preset('cache_text_encoder')
                         did_move = True
                         
                     if file_item.encode_control_in_text_embeddings:
@@ -2077,8 +2076,9 @@ class TextEmbeddingCachingMixin:
                 file_item.is_text_embedding_cached = True
                 i += 1
             # restore device state
-            # if did_move:
-            #     self.sd.restore_device_state()
+            if did_move:
+                self.sd.restore_device_state()
+                flush()
 
 
 class CLIPCachingMixin:

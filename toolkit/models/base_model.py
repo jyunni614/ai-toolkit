@@ -70,7 +70,7 @@ DO_NOT_TRAIN_WEIGHTS = [
     "refiner_unet_time_embedding.linear_2.weight",
 ]
 
-DeviceStatePreset = Literal['cache_latents', 'generate']
+DeviceStatePreset = Literal['cache_latents', 'cache_text_encoder', 'generate']
 
 
 class BlankNetwork:
@@ -1517,6 +1517,10 @@ class BaseModel:
         if device_state_preset in ['generate']:
             active_modules = ['vae', 'unet',
                               'text_encoder', 'adapter', 'refiner_unet']
+        #region 추가
+        if device_state_preset in ['cache_text_encoder']:
+            active_modules = ['text_encoder']
+        #endregion
 
         state = copy.deepcopy(empty_preset)
         # vae
