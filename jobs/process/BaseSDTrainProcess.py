@@ -108,7 +108,7 @@ class BaseSDTrainProcess(BaseTrainProcess):
             self.network_config = None
         self.train_config = TrainConfig(**self.get_conf('train', {}))
         model_config = self.get_conf('model', {})
-        self.modules_being_trained: List[torch.nn.Module] = [self.sd.unet]
+        self.modules_being_trained: List[torch.nn.Module] = []
 
         # update modelconfig dtype to match train
         model_config['dtype'] = self.train_config.dtype
