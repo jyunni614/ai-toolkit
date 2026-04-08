@@ -20,6 +20,9 @@ from safetensors.torch import load_file
 
 from transformers import AutoTokenizer, Qwen3ForCausalLM
 from diffusers import AutoencoderKL
+#region 추가
+import gc
+#endregion
 
 try:
     from diffusers import ZImagePipeline
@@ -59,6 +62,8 @@ class FakeTransformer(torch.nn.Module):
 
     def forward(self, *args, **kwargs):
         raise NotImplementedError("FakeTransformer should never be used for forward pass.")
+    
+FakeTextEncoder = FakeTransformer
 #endregion
 
 
@@ -215,6 +220,62 @@ class ZImageModel(BaseModel):
         self.model = transformer
 
         self.print_and_status_update("Training transformer loaded")
+        flush()
+    #endregion
+    #region 추가
+    def _has_real_text_encoder(self):
+        return (
+            self.pipeline is not None
+            and self.pipeline.text_encoder is not None
+            and not isinstance(self.pipeline.text_encoder, FakeTextEncoder)
+        )
+
+    def ensure_text_encoder_loaded(self):
+        if self._has_real_text_encoder():
+            return
+
+        dtype = self.torch_dtype
+        load_cfg, load_offload_dir = self._get_load_cfg()
+        _, base_model_path, _, _ = self._resolve_paths()
+
+        te_load_kwargs = {
+            "torch_dtype": dtype,
+            "offload_state_dict": load_cfg.get("offload_state_dict", True),
+            "offload_folder": os.path.join(load_offload_dir, "text_encoder"),
+            "low_cpu_mem_usage": load_cfg.get("te_low_cpu_mem_usage", True),
+        }
+
+        text_encoder = Qwen3ForCausalLM.from_pretrained(
+            base_model_path,
+            subfolder="text_encoder",
+            **te_load_kwargs,
+        )
+
+        text_encoder.requires_grad_(False)
+        text_encoder.eval()
+        text_encoder.to("cpu")
+
+        self.pipeline.text_encoder = text_encoder
+        self.text_encoder = [text_encoder]
+        flush()
+
+    def unload_text_encoder_after_cache(self):
+        if not self._has_real_text_encoder():
+            return
+
+        self.print_and_status_update("Unloading text encoder after cache")
+
+        old_te = self.pipeline.text_encoder
+        try:
+            old_te.to("cpu")
+        except Exception:
+            pass
+
+        self.pipeline.text_encoder = FakeTextEncoder(self.device_torch, self.torch_dtype)
+        self.text_encoder = [self.pipeline.text_encoder]
+
+        del old_te
+        gc.collect()
         flush()
     #endregion
 
@@ -608,6 +669,8 @@ class ZImageModel(BaseModel):
         return self.pipeline is not None and self.pipeline.transformer is not None and not isinstance(self.pipeline.transformer, FakeTransformer)
 
     def get_prompt_embeds(self, prompt: str) -> PromptEmbeds:
+        self.ensure_text_encoder_loaded() # 추가 v5
+        
         if self._has_real_transformer() and self.pipeline.transformer.device == self.device_torch:
             self.pipeline.transformer.to("cpu")
             flush()

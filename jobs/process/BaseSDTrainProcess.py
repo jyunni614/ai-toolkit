@@ -1644,10 +1644,26 @@ class BaseSDTrainProcess(BaseTrainProcess):
                 self.datasets, self.train_config.batch_size, self.sd
             )
 
+        # 수정 v2
+        # if self.datasets_reg is not None:
+        #     self.data_loader_reg = get_dataloader_from_datasets(
+        #         self.datasets_reg, self.train_config.batch_size, self.sd
+        #     )
+
+        # if use_zimage_cache_bootstrap:
+        #     self.sd.load_transformer_for_training()
         if self.datasets_reg is not None:
             self.data_loader_reg = get_dataloader_from_datasets(
                 self.datasets_reg, self.train_config.batch_size, self.sd
             )
+
+        if (
+            use_zimage_cache_bootstrap
+            and self.train_config.cache_text_embeddings
+            and not self.train_config.train_text_encoder
+            and hasattr(self.sd, "unload_text_encoder_after_cache")
+        ):
+            self.sd.unload_text_encoder_after_cache()
 
         if use_zimage_cache_bootstrap:
             self.sd.load_transformer_for_training()
