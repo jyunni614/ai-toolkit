@@ -2180,6 +2180,15 @@ class BaseSDTrainProcess(BaseTrainProcess):
         self.sd.set_device_state(self.train_device_state_preset)
         print_acc("After set_device_state")
         flush()
+        
+        if self.network is not None and self.model_config.arch == "zimage":
+            print_acc("Moving LoRA network to GPU after set_device_state")
+            self.network.force_to(self.device_torch, dtype=torch.float32)
+            flush()
+            
+        if self.network is not None:
+            first_param = next(self.network.parameters())
+            print_acc(f"LoRA first param device: {first_param.device}, dtype: {first_param.dtype}")
         # self.step_num = 0
 
         # print_acc(f"Compiling Model")
