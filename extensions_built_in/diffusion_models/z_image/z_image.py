@@ -15,7 +15,7 @@ from toolkit.samplers.custom_flowmatch_sampler import (
 from toolkit.accelerator import unwrap_model
 from optimum.quanto import freeze
 from toolkit.util.quantize import quantize, get_qtype, quantize_model
-from toolkit.memory_management import MemoryManager
+from toolkit.memory_management import MemoryManager # 이미 import 중
 from safetensors.torch import load_file
 
 from transformers import AutoTokenizer, Qwen3ForCausalLM
@@ -216,6 +216,26 @@ class ZImageModel(BaseModel):
             self.print_and_status_update("Quantizing Transformer")
             quantize_model(self, transformer)
             flush()
+        
+        #region 추가
+        if (
+            self.model_config.layer_offloading
+            and self.model_config.layer_offloading_transformer_percent > 0
+        ):
+            self.print_and_status_update(
+                f"Attaching MemoryManager to transformer ({self.model_config.layer_offloading_transformer_percent:.2f})"
+            )
+            MemoryManager.attach(
+                transformer,
+                self.device_torch,
+                offload_percent=self.model_config.layer_offloading_transformer_percent,
+                ignore_modules=[
+                    transformer.x_pad_token,
+                    transformer.cap_pad_token,
+                ],
+            )
+            flush()
+        #endregion
 
         self.pipeline.transformer = transformer
         self.model = transformer
@@ -380,211 +400,6 @@ class ZImageModel(BaseModel):
         if not cache_only:
             self.load_transformer_for_training()
             self.print_and_status_update("Model Loaded")
-        # #region 1) 추가
-        # load_cfg = self.model_config.model_kwargs or {}
-        # load_offload_dir = load_cfg.get("load_offload_dir", "/content/aitk_load_offload")
-        # os.makedirs(load_offload_dir, exist_ok=True)
-        # #endregion
-        
-        # dtype = self.torch_dtype
-        # self.print_and_status_update("Loading ZImage model")
-        # model_path = self.model_config.name_or_path
-        # base_model_path = self.model_config.extras_name_or_path
-
-        # self.print_and_status_update("Loading transformer")
-
-        # transformer_path = model_path
-        # transformer_subfolder = "transformer"
-        # if os.path.exists(transformer_path):
-        #     transformer_subfolder = None
-        #     transformer_path = os.path.join(transformer_path, "transformer")
-        #     # check if the path is a full checkpoint.
-        #     te_folder_path = os.path.join(model_path, "text_encoder")
-        #     # if we have the te, this folder is a full checkpoint, use it as the base
-        #     if os.path.exists(te_folder_path):
-        #         base_model_path = model_path
-
-        # #region 2) 수정
-        # # transformer = ZImageTransformer2DModel.from_pretrained(
-        # #     transformer_path, subfolder=transformer_subfolder, torch_dtype=dtype
-        # # )
-        # # transformer_load_kwargs = {
-        # #     "torch_dtype": dtype,
-        # #     "offload_state_dict": load_cfg.get("offload_state_dict", True),
-        # #     "offload_folder": os.path.join(load_offload_dir, "transformer"),
-        # # }
-
-        # # if load_cfg.get("force_low_cpu_mem_usage", False):
-        # #     transformer_load_kwargs["low_cpu_mem_usage"] = True
-        # # 교체 2
-        # transformer_load_kwargs = {
-        #     "torch_dtype": dtype,
-        #     "offload_state_dict": load_cfg.get("offload_state_dict", True),
-        #     "offload_folder": os.path.join(load_offload_dir, "transformer"),
-        #     "low_cpu_mem_usage": load_cfg.get("transformer_low_cpu_mem_usage", False),
-        # }
-
-        # transformer = ZImageTransformer2DModel.from_pretrained(
-        #     transformer_path,
-        #     subfolder=transformer_subfolder,
-        #     **transformer_load_kwargs,
-        # )
-        # #endregion
-
-        # # load assistant lora if specified
-        # if self.model_config.assistant_lora_path is not None:
-        #     self.load_training_adapter(transformer)
-        #     # set qtype to be float8 if it is qfloat8
-        #     if self.model_config.qtype == "qfloat8":
-        #         self.model_config.qtype = "float8"
-
-        # if self.model_config.quantize:
-        #     self.print_and_status_update("Quantizing Transformer")
-        #     quantize_model(self, transformer)
-        #     flush()
-
-        # #region 교체
-        # # if (
-        # #     self.model_config.layer_offloading
-        # #     and self.model_config.layer_offloading_transformer_percent > 0
-        # # ):
-        # #     MemoryManager.attach(
-        # #         transformer,
-        # #         self.device_torch,
-        # #         offload_percent=self.model_config.layer_offloading_transformer_percent,
-        # #         ignore_modules=[
-        # #             transformer.x_pad_token,
-        # #             transformer.cap_pad_token,
-        # #         ]
-        # #     )
-        # # ~~두번째 교체~~ -> 삭제
-        # # use_transformer_mm = (
-        # #     self.model_config.layer_offloading
-        # #     and self.model_config.layer_offloading_text_encoder_percent > 0
-        # #     and not load_cfg.get("disable_text_encoder_memory_manager", True)
-        # # )
-
-        # # if use_transformer_mm:
-        # #     MemoryManager.attach(
-        # #         text_encoder,
-        # #         self.device_torch,
-        # #         offload_percent=self.model_config.layer_offloading_text_encoder_percent,
-        # #     )
-        # #endregion
-
-        # if self.model_config.low_vram:
-        #     self.print_and_status_update(
-        #         "Skipping transformer.to('cpu') because low_vram is incompatible with meta-tensor loading path"
-        #     )
-
-        # flush()
-
-        # self.print_and_status_update("Text Encoder")
-        # tokenizer = AutoTokenizer.from_pretrained(
-        #     base_model_path, subfolder="tokenizer", torch_dtype=dtype
-        # )
-        # #region 3) 수정        
-        # # text_encoder = Qwen3ForCausalLM.from_pretrained(
-        # #     base_model_path, subfolder="text_encoder", torch_dtype=dtype
-        # # )
-        # # te_load_kwargs = {
-        # #     "torch_dtype": dtype,
-        # #     "offload_state_dict": load_cfg.get("offload_state_dict", True),
-        # #     "offload_folder": os.path.join(load_offload_dir, "text_encoder"),
-        # #     "low_cpu_mem_usage": load_cfg.get("te_low_cpu_mem_usage", True),
-        # # }
-        # # 교체 2
-        # te_load_kwargs = {
-        #     "torch_dtype": dtype,
-        #     "offload_state_dict": load_cfg.get("offload_state_dict", True),
-        #     "offload_folder": os.path.join(load_offload_dir, "text_encoder"),
-        #     "low_cpu_mem_usage": load_cfg.get("te_low_cpu_mem_usage", True),
-        # }
-
-        # text_encoder = Qwen3ForCausalLM.from_pretrained(
-        #     base_model_path,
-        #     subfolder="text_encoder",
-        #     **te_load_kwargs,
-        # )
-        # #endregion
-
-        # if (
-        #     self.model_config.layer_offloading
-        #     and self.model_config.layer_offloading_text_encoder_percent > 0
-        # ):
-        #     MemoryManager.attach(
-        #         text_encoder,
-        #         self.device_torch,
-        #         offload_percent=self.model_config.layer_offloading_text_encoder_percent,
-        #     )
-
-        # #region 4.1) 제거
-        # # text_encoder.to(self.device_torch, dtype=dtype)
-        # #endregion
-        # flush()
-
-        # if self.model_config.quantize_te:
-        #     self.print_and_status_update("Quantizing Text Encoder")
-        #     quantize(text_encoder, weights=get_qtype(self.model_config.qtype_te))
-        #     freeze(text_encoder)
-        #     flush()
-
-        # self.print_and_status_update("Loading VAE")
-        # vae = AutoencoderKL.from_pretrained(
-        #     base_model_path, subfolder="vae", torch_dtype=dtype
-        # )
-
-        # self.noise_scheduler = ZImageModel.get_train_scheduler()
-
-        # self.print_and_status_update("Making pipe")
-
-        # kwargs = {}
-
-        # pipe: ZImagePipeline = ZImagePipeline(
-        #     scheduler=self.noise_scheduler,
-        #     text_encoder=None,
-        #     tokenizer=tokenizer,
-        #     vae=vae,
-        #     transformer=None,
-        #     **kwargs,
-        # )
-        # # for quantization, it works best to do these after making the pipe
-        # pipe.text_encoder = text_encoder
-        # pipe.transformer = transformer
-
-        # self.print_and_status_update("Preparing Model")
-
-        # text_encoder = [pipe.text_encoder]
-        # tokenizer = [pipe.tokenizer]
-
-        # # leave it on cpu for now
-        # #region 교체
-        # # if not self.low_vram:
-        # #     pipe.transformer = pipe.transformer.to(self.device_torch)
-        # pipe.transformer = transformer
-        # #endregion
-
-        # flush()
-        # # just to make sure everything is on the right device and dtype
-        # #region 4.2) 수정
-        # # text_encoder[0].to(self.device_torch)
-        # # text_encoder[0].requires_grad_(False)
-        # # text_encoder[0].eval()
-        # text_encoder[0].requires_grad_(False)
-        # text_encoder[0].eval()
-        # _has_meta_tensors = lambda module: any(getattr(p, "is_meta", False) for p in module.parameters())
-        # if not _has_meta_tensors(text_encoder[0]):
-        #     text_encoder[0].to("cpu")
-        # #endregion
-        # flush()
-
-        # # save it to the model class
-        # self.vae = vae
-        # self.text_encoder = text_encoder  # list of text encoders
-        # self.tokenizer = tokenizer  # list of tokenizers
-        # self.model = pipe.transformer
-        # self.pipeline = pipe
-        # self.print_and_status_update("Model Loaded")
 
     def get_generation_pipeline(self):
         scheduler = ZImageModel.get_train_scheduler()
