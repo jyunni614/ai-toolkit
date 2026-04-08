@@ -111,6 +111,17 @@ class ZImageModel(BaseModel):
         load_offload_dir = load_cfg.get("load_offload_dir", "/content/aitk_load_offload")
         os.makedirs(load_offload_dir, exist_ok=True)
         return load_cfg, load_offload_dir
+    
+    def _move_tree_to_cpu(self, obj):
+        if torch.is_tensor(obj):
+            return obj.detach().to("cpu")
+        if isinstance(obj, list):
+            return [self._move_tree_to_cpu(x) for x in obj]
+        if isinstance(obj, tuple):
+            return tuple(self._move_tree_to_cpu(x) for x in obj)
+        if isinstance(obj, dict):
+            return {k: self._move_tree_to_cpu(v) for k, v in obj.items()}
+        return obj
     #endregion
     #region 로더 추가
     def load_cache_models(self):
@@ -611,10 +622,12 @@ class ZImageModel(BaseModel):
             device=self.device_torch,
         )
 
+        prompt_embeds = self._move_tree_to_cpu(prompt_embeds)
+
         self.pipeline.text_encoder.to("cpu")
         flush()
 
-        pe = PromptEmbeds([prompt_embeds.to("cpu"), None])
+        pe = PromptEmbeds([prompt_embeds, None])
         return pe
     #endregion
 
