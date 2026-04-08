@@ -2036,7 +2036,8 @@ class TextEmbeddingCachingMixin:
                 if not os.path.exists(text_embedding_path):
                     # load if not loaded
                     if not did_move:
-                        self.sd.set_device_state_preset('cache_text_encoder')
+                        # 수정
+                        # self.sd.set_device_state_preset('cache_text_encoder')
                         did_move = True
                         
                     if file_item.encode_control_in_text_embeddings:

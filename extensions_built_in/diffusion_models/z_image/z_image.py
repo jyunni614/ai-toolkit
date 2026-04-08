@@ -440,21 +440,31 @@ class ZImageModel(BaseModel):
     #     )
     #     pe = PromptEmbeds([prompt_embeds, None])
     #     return pe
+    # 교체 v2
     def get_prompt_embeds(self, prompt: str) -> PromptEmbeds:
-        moved_to_gpu = False
+        # model_kwargs.force_cpu_text_encoder: true 면
+        # text encoder를 GPU로 올리지 않고 CPU에서 임베딩 생성
+        force_cpu_te = self.model_config.model_kwargs.get("force_cpu_text_encoder", True)
 
-        if self.pipeline.text_encoder.device != self.device_torch:
-            self.pipeline.text_encoder.to(self.device_torch)
-            moved_to_gpu = True
+        target_device = torch.device("cpu") if force_cpu_te else self.device_torch
+        moved = False
+
+        if self.pipeline.text_encoder.device != target_device:
+            self.pipeline.text_encoder.to(target_device)
+            moved = True
+            flush()
 
         prompt_embeds, _ = self.pipeline.encode_prompt(
             prompt,
             do_classifier_free_guidance=False,
-            device=self.device_torch,
+            device=target_device,
         )
+
+        # CPU 경로면 그대로 CPU 텐서로 두는 게 안전함
+        # 나중에 학습 코드가 필요할 때 GPU로 옮기게 둔다.
         pe = PromptEmbeds([prompt_embeds, None])
 
-        if moved_to_gpu and self.model_config.low_vram:
+        if not force_cpu_te and moved and self.model_config.low_vram:
             self.pipeline.text_encoder.to("cpu")
             flush()
 
