@@ -1756,9 +1756,11 @@ class BaseSDTrainProcess(BaseTrainProcess):
         else:
             text_encoder.requires_grad_(False)
             text_encoder.eval()
-        unet.to(self.device_torch, dtype=dtype)
+        #region 미루기
+        # unet.to(self.device_torch, dtype=dtype)
         unet.requires_grad_(False)
         unet.eval()
+        #endregion
         vae = vae.to(torch.device('cpu'), dtype=dtype)
         vae.requires_grad_(False)
         vae.eval()
@@ -1840,7 +1842,10 @@ class BaseSDTrainProcess(BaseTrainProcess):
 
 
                 # todo switch everything to proper mixed precision like this
-                self.network.force_to(self.device_torch, dtype=torch.float32)
+                #region 교체
+                # self.network.force_to(self.device_torch, dtype=torch.float32)
+                self.network.force_to("cpu", dtype=torch.float32)
+                #endregion
                 # give network to sd so it can use it
                 self.sd.network = self.network
                 self.network._update_torch_multiplier()
@@ -1871,7 +1876,10 @@ class BaseSDTrainProcess(BaseTrainProcess):
                         num_replaced=len(self.network.get_all_modules()),
                     )
 
+                # 로그 보강
+                print_acc("LoRA apply_to done")
                 self.network.prepare_grad_etc(text_encoder, unet)
+                print_acc("LoRA prepare_grad_etc done")
                 flush()
 
                 # LyCORIS doesnt have default_lr
@@ -1887,11 +1895,13 @@ class BaseSDTrainProcess(BaseTrainProcess):
                 params_net = self.network.prepare_optimizer_params(
                     **config
                 )
+                print_acc("LoRA optimizer params done")
 
                 params += params_net
 
                 if self.train_config.gradient_checkpointing:
                     self.network.enable_gradient_checkpointing()
+                print_acc("LoRA gradient checkpointing done")
 
                 lora_name = self.name
                 # need to adapt name so they are not mixed up
@@ -1980,6 +1990,14 @@ class BaseSDTrainProcess(BaseTrainProcess):
                 flush()
 
             params = self.load_additional_training_modules(params)
+            #region 추가
+            if use_zimage_cache_bootstrap:
+                print_acc("Moving transformer+LoRA to GPU after LoRA setup")
+                self.sd.unet.to(self.device_torch, dtype=dtype)
+                if self.network is not None:
+                    self.network.force_to(self.device_torch, dtype=torch.float32)
+                flush()
+            #endregion
 
         else:  # no network, embedding or adapter
             # set the device state preset before getting params
