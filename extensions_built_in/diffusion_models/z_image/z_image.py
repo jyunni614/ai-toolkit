@@ -404,15 +404,20 @@ class ZImageModel(BaseModel):
     def get_generation_pipeline(self):
         scheduler = ZImageModel.get_train_scheduler()
 
+        te_for_pipeline = None
+        if self.sample_prompts_cache is None:
+            self.ensure_text_encoder_loaded()
+            te_for_pipeline = unwrap_model(self.text_encoder[0])
+        elif self._has_real_text_encoder():
+            te_for_pipeline = unwrap_model(self.text_encoder[0])
+
         pipeline: ZImagePipeline = ZImagePipeline(
             scheduler=scheduler,
-            text_encoder=unwrap_model(self.text_encoder[0]),
+            text_encoder=te_for_pipeline,
             tokenizer=self.tokenizer[0],
             vae=unwrap_model(self.vae),
             transformer=unwrap_model(self.transformer),
         )
-
-        pipeline = pipeline.to(self.device_torch)
 
         return pipeline
 
@@ -425,12 +430,10 @@ class ZImageModel(BaseModel):
         generator: torch.Generator,
         extra: dict,
     ):
-        self.model.to(self.device_torch, dtype=self.torch_dtype)
-        self.model.to(self.device_torch)
-
         sc = self.get_bucket_divisibility()
         gen_config.width = int(gen_config.width // sc * sc)
         gen_config.height = int(gen_config.height // sc * sc)
+
         img = pipeline(
             prompt_embeds=conditional_embeds.text_embeds,
             negative_prompt_embeds=unconditional_embeds.text_embeds,
