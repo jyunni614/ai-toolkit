@@ -1990,13 +1990,13 @@ class BaseSDTrainProcess(BaseTrainProcess):
                 flush()
 
             params = self.load_additional_training_modules(params)
-            #region 추가
-            if use_zimage_cache_bootstrap:
-                print_acc("Moving transformer+LoRA to GPU after LoRA setup")
-                self.sd.unet.to(self.device_torch, dtype=dtype)
-                if self.network is not None:
-                    self.network.force_to(self.device_torch, dtype=torch.float32)
-                flush()
+            #region 제거
+            # if use_zimage_cache_bootstrap:
+            #     print_acc("Moving transformer+LoRA to GPU after LoRA setup")
+            #     self.sd.unet.to(self.device_torch, dtype=dtype)
+            #     if self.network is not None:
+            #         self.network.force_to(self.device_torch, dtype=torch.float32)
+            #     flush()
             #endregion
 
         else:  # no network, embedding or adapter
@@ -2103,7 +2103,9 @@ class BaseSDTrainProcess(BaseTrainProcess):
         flush()
         self.last_save_step = self.step_num
         ### HOOK ###
+        print_acc("Before hook_before_train_loop")
         self.hook_before_train_loop()
+        print_acc("After hook_before_train_loop")
 
         # compile the model if needed (must be after LoRA/adapter injection AND accelerator.prepare)
         if self.model_config.compile:
@@ -2158,7 +2160,9 @@ class BaseSDTrainProcess(BaseTrainProcess):
 
         self.lr_scheduler.step(self.step_num)
 
+        print_acc("Before set_device_state")
         self.sd.set_device_state(self.train_device_state_preset)
+        print_acc("After set_device_state")
         flush()
         # self.step_num = 0
 
