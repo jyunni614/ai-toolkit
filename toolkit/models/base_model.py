@@ -404,6 +404,11 @@ class BaseModel:
 
         self.save_device_state()
         self.set_device_state_preset('generate')
+        
+        if self.network is not None and self.model_config.arch == "zimage":
+            print_acc("Moving LoRA network to GPU for sampling")
+            self.network.force_to(self.device_torch, dtype=torch.float32)
+            flush()
 
         # save current seed state for training
         rng_state = torch.get_rng_state()
@@ -698,6 +703,11 @@ class BaseModel:
         if network is not None:
             network.train()
             network.multiplier = start_multiplier
+            
+        if self.network is not None and self.model_config.arch == "zimage":
+            print_acc("Moving LoRA network back to CPU after sampling")
+            self.network.force_to("cpu", dtype=torch.float32)
+            flush()
 
         self.unet.to(self.device_torch, dtype=self.torch_dtype)
         if network.is_merged_in:
