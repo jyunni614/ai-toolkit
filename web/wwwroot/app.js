@@ -1275,84 +1275,79 @@ function renderJobDetailView() {
   const job = detail.job;
   const queue = detail.queues.find((item) => item.gpuIds === job.gpuIds);
   const progress = getJobProgress(job);
+  const progressLabel = progress.total ? `Step ${job.step} of ${progress.total}` : `${job.step} steps`;
+  const statusCopy = job.info || `Job is currently ${job.status}.`;
 
   return {
     title: job.name,
-    subtitle: 'Live log, samples, loss metrics, and model files coming from the same training folder layout the old UI used.',
+    subtitle: 'Dense overview layout with the live log on the left, runtime + checkpoints on the right, and secondary panels below.',
     actions: topbarActions(renderJobDetailActions(job, queue)),
     content: `
-      <section class="detail-grid">
-        <div class="panel">
-          <div class="surface-header">
-            <h3>Overview</h3>
-            <div class="badge-row">
-              ${renderStatusBadge(job.status)}
-              <span class="badge">GPU ${escapeHtml(job.gpuIds)}</span>
+      <section class="job-detail-shell">
+        <div class="job-detail-main">
+          <section class="panel job-overview-panel">
+            <div class="job-state-banner ${job.status === 'error' ? 'danger' : queue?.isRunning ? 'success' : ''}">
+              <div class="job-state-copy">
+                <div class="job-state-title">${escapeHtml(statusCopy)}</div>
+              </div>
+              <div class="badge-row">
+                ${renderStatusBadge(job.status)}
+                <span class="badge">GPU ${escapeHtml(job.gpuIds)}</span>
+              </div>
             </div>
-          </div>
-          <div class="kv-grid">
-            <div class="kv-item">
-              <div class="kv-label">Progress</div>
-              <div class="kv-value">${job.step} / ${progress.total || 'unknown'} steps</div>
-              <div class="progress-track"><div class="progress-bar" style="width:${progress.percent}%"></div></div>
-            </div>
-            <div class="kv-item">
-              <div class="kv-label">Queue State</div>
-              <div class="kv-value">${queue?.isRunning ? 'Running' : 'Stopped'}</div>
-            </div>
-            <div class="kv-item">
-              <div class="kv-label">Info</div>
-              <div class="kv-value">${escapeHtml(job.info || 'No status info')}</div>
-            </div>
-            <div class="kv-item">
-              <div class="kv-label">Updated</div>
-              <div class="kv-value">${escapeHtml(formatDate(job.updatedAt))}</div>
-            </div>
-          </div>
-          ${renderJobRuntimeSummary(job)}
-        </div>
-        <div class="panel">
-          <div class="surface-header">
-            <h3>Loss Metrics</h3>
-            <div class="inline-actions">
-              <select data-change="loss-key">
-                ${(detail.loss?.keys || []).map((key) => `<option value="${escapeHtml(key)}" ${key === detail.lossKey ? 'selected' : ''}>${escapeHtml(key)}</option>`).join('')}
-              </select>
-            </div>
-          </div>
-          ${renderLossChart(detail.loss)}
-        </div>
-      </section>
-      <section class="detail-grid section-spaced">
-        <div class="panel">
-          <div class="surface-header">
-            <h3>Live Log</h3>
-            <span class="badge info">${detail.log ? `${detail.log.length.toLocaleString()} chars` : 'empty'}</span>
-          </div>
-          <div id="job-live-log" class="log-block">${escapeHtml(detail.log || 'No log output yet.')}</div>
-        </div>
-        <div class="panel">
-          <div class="surface-header">
-            <h3>Model Files</h3>
-            <span class="badge">${detail.files.length} files</span>
-          </div>
-          ${detail.files.length
-            ? `<div class="stack">${detail.files.map((file) => `
-                <div class="surface">
-                  <div class="surface-header">
-                    <div>
-                      <div>${escapeHtml(file.path.split(/[\\/]/).pop())}</div>
-                      <div class="field-help mono">${escapeHtml(file.path)}</div>
-                    </div>
-                    <a class="secondary-button" href="${fileUrl(file.path)}">Download</a>
+            <div class="job-overview-body">
+              <div class="job-progress-block">
+                <div class="job-progress-head">
+                  <div>
+                    <div class="kv-label">Progress</div>
+                    <div class="job-progress-value">${progressLabel}</div>
                   </div>
-                  <div class="field-help">${formatBytes(file.size)}</div>
-                </div>`).join('')}</div>`
-            : renderEmptyState('No model checkpoints found yet.')}
+                  <div class="field-help">${escapeHtml(formatDate(job.updatedAt))}</div>
+                </div>
+                <div class="progress-track job-progress-track"><div class="progress-bar" style="width:${progress.percent}%"></div></div>
+              </div>
+              <div class="job-overview-facts">
+                ${renderJobFact('Job Name', job.name)}
+                ${renderJobFact('Assigned GPUs', `GPU ${job.gpuIds}`)}
+                ${renderJobFact('Queue', queue?.isRunning ? 'Running' : 'Stopped')}
+                ${renderJobFact('Speed', job.speedString || 'n/a')}
+              </div>
+            </div>
+          </section>
+          <section class="panel job-log-panel">
+            <div class="surface-header compact-header">
+              <h3>Live Log</h3>
+              <span class="badge info">${detail.log ? `${detail.log.length.toLocaleString()} chars` : 'empty'}</span>
+            </div>
+            <div id="job-live-log" class="log-block job-log-large">${escapeHtml(detail.log || 'No log output yet.')}</div>
+          </section>
         </div>
+        <aside class="job-detail-sidebar">
+          <section class="panel job-runtime-panel">
+            ${renderJobRuntimeSummary(job)}
+          </section>
+          <section class="panel job-files-panel">
+            <div class="surface-header compact-header">
+              <h3>Checkpoints</h3>
+              <span class="badge">${detail.files.length} files</span>
+            </div>
+            ${renderJobFilesList(detail.files)}
+          </section>
+        </aside>
+      </section>
+      <section class="panel section-spaced job-loss-panel">
+        <div class="surface-header compact-header">
+          <h3>Loss Metrics</h3>
+          <div class="inline-actions">
+            <select data-change="loss-key">
+              ${(detail.loss?.keys || []).map((key) => `<option value="${escapeHtml(key)}" ${key === detail.lossKey ? 'selected' : ''}>${escapeHtml(key)}</option>`).join('')}
+            </select>
+          </div>
+        </div>
+        ${renderLossChart(detail.loss)}
       </section>
       <section class="panel section-spaced">
-        <div class="surface-header">
+        <div class="surface-header compact-header">
           <h3>Samples</h3>
           <div class="inline-actions">
             <span class="badge">${detail.samples.length} assets</span>
@@ -1364,6 +1359,36 @@ function renderJobDetailView() {
     `,
   };
 }
+
+function renderJobFact(label, value) {
+  return `
+    <div class="job-fact">
+      <div class="job-fact-label">${escapeHtml(label)}</div>
+      <div class="job-fact-value">${escapeHtml(String(value || 'n/a'))}</div>
+    </div>`;
+}
+
+function renderJobFilesList(files) {
+  if (!files.length) {
+    return renderEmptyState('No model checkpoints found yet.');
+  }
+
+  return `
+    <div class="file-list compact-scroll">
+      ${files.map((file) => {
+        const name = file.path.split(/[\\/]/).pop() || file.path;
+        return `
+          <div class="file-row">
+            <div class="file-row-main">
+              <div class="file-row-name">${escapeHtml(name)}</div>
+              <div class="file-row-size">${formatBytes(file.size)}</div>
+            </div>
+            <a class="ghost-button file-row-action" href="${fileUrl(file.path)}">Download</a>
+          </div>`;
+      }).join('')}
+    </div>`;
+}
+
 function renderDatasetsView() {
   const datasets = state.datasets;
   const selectedItem = datasets.images.find((item) => item.imgPath === datasets.selectedImage);
@@ -1629,9 +1654,11 @@ function renderJobRuntimeSummary(job) {
     cards.push(renderRuntimeStatCard({
       title: 'CPU',
       subtitle: cpu.name || 'System CPU',
-      load,
-      loadLabel: `Load ${formatNumber(load)}%`,
-      memoryLabel: total ? `RAM ${formatNumber(used)} / ${formatNumber(total)} MB` : 'RAM telemetry unavailable',
+      loadPercent: load,
+      loadValue: `${formatNumber(load)}%`,
+      memoryTitle: 'Memory',
+      memoryPercent: total ? (used / total) * 100 : 0,
+      memoryValue: total ? `${formatNumber(used)} / ${formatNumber(total)} MB` : 'Telemetry unavailable',
     }));
   }
 
@@ -1643,12 +1670,17 @@ function renderJobRuntimeSummary(job) {
 
   if (gpuInfo?.isMac && (requestedGpuIds.includes('mps') || !requestedGpuIds.length)) {
     const appleGpu = gpuInfo.gpus?.[0];
+    const total = Number(appleGpu?.memory?.total) || 0;
+    const used = Number(appleGpu?.memory?.used) || 0;
+    const load = Number(appleGpu?.utilization?.gpu) || 0;
     cards.push(renderRuntimeStatCard({
       title: 'GPU mps',
       subtitle: appleGpu?.name || 'Apple GPU',
-      load: appleGpu?.utilization?.gpu || 0,
-      loadLabel: 'Unified GPU telemetry is limited on macOS',
-      memoryLabel: appleGpu?.memory?.total ? `VRAM ${formatNumber(appleGpu.memory.used || 0)} / ${formatNumber(appleGpu.memory.total)} MB` : 'Unified memory only',
+      loadPercent: load,
+      loadValue: `${formatNumber(load)}%`,
+      memoryTitle: 'Memory',
+      memoryPercent: total ? (used / total) * 100 : 0,
+      memoryValue: total ? `${formatNumber(used)} / ${formatNumber(total)} MB` : 'Unified memory',
     }));
   }
 
@@ -1668,44 +1700,54 @@ function renderJobRuntimeSummary(job) {
     cards.push(renderRuntimeStatCard({
       title: `GPU ${gpuId}`,
       subtitle: gpu.name || `GPU ${gpuId}`,
-      load,
-      loadLabel: `Load ${formatNumber(load)}%`,
-      memoryLabel: total ? `VRAM ${formatNumber(used)} / ${formatNumber(total)} MB` : 'VRAM telemetry unavailable',
+      loadPercent: load,
+      loadValue: `${formatNumber(load)}%`,
+      memoryTitle: 'VRAM',
+      memoryPercent: total ? (used / total) * 100 : 0,
+      memoryValue: total ? `${formatNumber(used)} / ${formatNumber(total)} MB` : 'Telemetry unavailable',
     }));
   }
 
   if (!cards.length) {
-    return '';
+    return renderEmptyState('No runtime telemetry available.');
   }
 
   return `
-    <div class="job-runtime-summary">
-      <div class="surface-header compact-header">
-        <h3>System Snapshot</h3>
-        <span class="badge info">Live overview telemetry</span>
+    <div class="surface-header compact-header">
+      <h3>System Snapshot</h3>
+      <span class="badge info">Live telemetry</span>
+    </div>
+    <div class="runtime-grid runtime-grid-dense">
+      ${cards.join('')}
+    </div>`;
+}
+
+function renderRuntimeStatCard({ title, subtitle, loadPercent, loadValue, memoryTitle, memoryPercent, memoryValue }) {
+  const normalizedLoad = Number.isFinite(loadPercent) ? Math.max(0, Math.min(100, loadPercent)) : 0;
+  const normalizedMemory = Number.isFinite(memoryPercent) ? Math.max(0, Math.min(100, memoryPercent)) : 0;
+  return `
+    <div class="runtime-card">
+      <div class="runtime-card-head">
+        <div class="runtime-title">${escapeHtml(title)}</div>
+        <div class="runtime-subtitle">${escapeHtml(subtitle || '')}</div>
       </div>
-      <div class="runtime-grid">
-        ${cards.join('')}
+      <div class="runtime-meter">
+        <div class="runtime-meter-head">
+          <span>Load</span>
+          <span>${escapeHtml(loadValue || 'n/a')}</span>
+        </div>
+        <div class="progress-track runtime-track compact"><div class="progress-bar" style="width:${normalizedLoad}%"></div></div>
+      </div>
+      <div class="runtime-meter">
+        <div class="runtime-meter-head">
+          <span>${escapeHtml(memoryTitle || 'Memory')}</span>
+          <span>${escapeHtml(memoryValue || 'n/a')}</span>
+        </div>
+        <div class="progress-track runtime-track compact memory"><div class="progress-bar" style="width:${normalizedMemory}%"></div></div>
       </div>
     </div>`;
 }
 
-function renderRuntimeStatCard({ title, subtitle, load, loadLabel, memoryLabel }) {
-  const clampedLoad = Number.isFinite(load) ? Math.max(0, Math.min(100, load)) : 0;
-  return `
-    <div class="runtime-card">
-      <div class="runtime-card-head">
-        <div>
-          <div class="runtime-title">${escapeHtml(title)}</div>
-          <div class="runtime-subtitle">${escapeHtml(subtitle || '')}</div>
-        </div>
-        <div class="runtime-load">${escapeHtml(Number.isFinite(load) ? `${formatNumber(load)}%` : 'n/a')}</div>
-      </div>
-      <div class="progress-track runtime-track"><div class="progress-bar" style="width:${clampedLoad}%"></div></div>
-      <div class="runtime-meta">${escapeHtml(loadLabel || '')}</div>
-      <div class="runtime-meta">${escapeHtml(memoryLabel || '')}</div>
-    </div>`;
-}
 function renderJobsTable(jobs) {
   if (!jobs.length) {
     return renderEmptyState('No jobs found.');
@@ -1745,7 +1787,7 @@ function renderJobRow(job) {
       <td class="mono">${escapeHtml(job.gpuIds)}</td>
       <td>${renderStatusBadge(job.status)}</td>
       <td>${escapeHtml(job.info || '')}</td>
-      <td><div class="inline-actions">${renderJobActions(job)}</div></td>
+      <td class="table-actions"><div class="inline-actions job-row-actions">${renderJobActions(job)}</div></td>
     </tr>
   `;
 }
@@ -1876,7 +1918,7 @@ function renderLossChart(loss) {
         <polyline fill="none" stroke="rgba(142,240,141,0.92)" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" points="${polyline}"></polyline>
       </svg>
       <div class="chart-caption">
-        <span>${escapeHtml(loss.key || 'loss')} ï¿½ ${points.length} points</span>
+        <span>${escapeHtml(loss.key || 'loss')} - ${points.length} points</span>
         <span>min ${formatNumber(min)} / max ${formatNumber(max)}</span>
       </div>
     </div>

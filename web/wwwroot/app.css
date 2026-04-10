@@ -1283,3 +1283,455 @@ form {
     grid-template-columns: 1fr;
   }
 }
+
+
+/* Dense layout refinements */
+.app-shell {
+  grid-template-columns: 16.25rem minmax(0, 1fr);
+}
+
+.sidebar {
+  padding: 1.25rem 1rem 1rem;
+}
+
+.brand-card {
+  padding: 1rem;
+  margin-bottom: 1rem;
+}
+
+.nav-links {
+  gap: 0.5rem;
+  margin-top: 0.625rem;
+}
+
+.nav-link {
+  padding: 0.75rem 0.875rem;
+}
+
+.sidebar-foot {
+  left: 1rem;
+  right: 1rem;
+  bottom: 1rem;
+  gap: 0.75rem;
+}
+
+.topbar {
+  gap: 0.875rem;
+  padding: 1.5rem 1.75rem 0.75rem;
+}
+
+.page-title h2 {
+  font-size: 2.125rem;
+}
+
+.page-title p {
+  margin-top: 0.45rem;
+  max-width: 54rem;
+}
+
+.topbar-actions {
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  max-width: 100%;
+  padding-bottom: 0.125rem;
+}
+
+.content-scroll {
+  padding: 0.625rem 1.75rem 1.75rem;
+}
+
+.grid,
+.metrics-grid,
+.system-grid,
+.detail-grid,
+.dataset-layout,
+.editor-layout {
+  gap: 1rem;
+}
+
+.panel,
+.hero-panel {
+  padding: 1rem;
+}
+
+.hero-line {
+  gap: 0.75rem;
+  margin-bottom: 0.875rem;
+}
+
+.hero-line h3,
+.panel h3,
+.section-title {
+  font-size: 1.125rem;
+}
+
+.metric-card {
+  padding: 0.95rem;
+}
+
+.metric-value {
+  margin-top: 0.65rem;
+  font-size: 1.7rem;
+}
+
+.stack {
+  gap: 0.875rem;
+}
+
+.surface {
+  padding: 0.875rem;
+}
+
+.surface-header {
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+}
+
+.button,
+.secondary-button,
+.ghost-button,
+.danger-button {
+  min-height: 2.25rem;
+  padding: 0 0.9rem;
+}
+
+.table th,
+.table td {
+  padding: 0.72rem 0.8rem;
+}
+
+.kv-grid {
+  gap: 0.75rem;
+}
+
+.kv-item {
+  padding: 0.75rem;
+}
+
+.kv-value {
+  margin-top: 0.5rem;
+}
+
+.progress-track {
+  margin-top: 0.45rem;
+  height: 0.5rem;
+}
+
+form {
+  gap: 0.75rem;
+}
+
+.field {
+  gap: 0.375rem;
+}
+
+.field input,
+.field textarea,
+.field select {
+  padding: 0.7rem 0.8rem;
+}
+
+.field textarea {
+  min-height: 9rem;
+}
+
+.table-actions {
+  width: 1%;
+  white-space: nowrap;
+}
+
+.job-row-actions {
+  flex-wrap: nowrap;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.job-row-actions > * {
+  flex: 0 0 auto;
+}
+
+.job-row-actions .button,
+.job-row-actions .secondary-button,
+.job-row-actions .ghost-button,
+.job-row-actions .danger-button {
+  min-height: 2rem;
+  padding: 0 0.75rem;
+}
+
+.job-detail-shell {
+  display: grid;
+  grid-template-columns: minmax(0, 1.6fr) minmax(19rem, 0.92fr);
+  gap: 1rem;
+  align-items: start;
+}
+
+.job-detail-main,
+.job-detail-sidebar {
+  display: grid;
+  gap: 1rem;
+  align-content: start;
+}
+
+.job-overview-panel {
+  padding: 0;
+  overflow: hidden;
+}
+
+.job-state-banner {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.875rem;
+  padding: 0.85rem 1rem;
+  border-bottom: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.job-state-banner.danger {
+  background: rgba(255, 125, 125, 0.08);
+}
+
+.job-state-banner.success {
+  background: rgba(82, 210, 109, 0.08);
+}
+
+.job-state-title {
+  font-size: 1rem;
+  font-weight: 650;
+  line-height: 1.35;
+}
+
+.job-overview-body {
+  padding: 0.95rem 1rem 1rem;
+  display: grid;
+  gap: 0.9rem;
+}
+
+.job-progress-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.job-progress-value {
+  margin-top: 0.2rem;
+  font-size: 1.35rem;
+  font-weight: 700;
+}
+
+.job-progress-track {
+  margin-top: 0.5rem;
+}
+
+.job-overview-facts {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+.job-fact {
+  padding: 0.75rem;
+  border-radius: var(--radius-md);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.job-fact-label {
+  font-size: 0.7rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
+.job-fact-value {
+  margin-top: 0.35rem;
+  font-size: 0.96rem;
+  font-weight: 600;
+  line-height: 1.35;
+  word-break: break-word;
+}
+
+.job-log-panel,
+.job-runtime-panel,
+.job-loss-panel,
+.job-files-panel {
+  padding: 0.95rem;
+}
+
+.job-log-large {
+  min-height: 26rem;
+  height: min(58vh, 46rem);
+  max-height: none;
+}
+
+.job-runtime-summary {
+  margin-top: 0.75rem;
+}
+
+.runtime-grid.runtime-grid-dense {
+  grid-template-columns: 1fr;
+  gap: 0.75rem;
+}
+
+.runtime-card {
+  padding: 0.875rem;
+}
+
+.runtime-card-head {
+  gap: 0.5rem;
+}
+
+.runtime-subtitle {
+  margin-top: 0.25rem;
+  font-size: 0.82rem;
+}
+
+.runtime-meter {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.runtime-meter + .runtime-meter {
+  margin-top: 0.7rem;
+}
+
+.runtime-meter-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  font-size: 0.8rem;
+  color: var(--ink-soft);
+}
+
+.runtime-track.compact {
+  margin-top: 0;
+  height: 0.45rem;
+}
+
+.runtime-track.memory .progress-bar {
+  background: linear-gradient(90deg, var(--amber), var(--blue));
+}
+
+.compact-scroll {
+  max-height: min(66vh, 46rem);
+  overflow: auto;
+}
+
+.file-list {
+  display: grid;
+  gap: 0;
+}
+
+.file-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.75rem;
+  align-items: center;
+  padding: 0.7rem 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.file-row:last-child {
+  border-bottom: 0;
+}
+
+.file-row-main {
+  min-width: 0;
+}
+
+.file-row-name {
+  font-weight: 600;
+  line-height: 1.35;
+  word-break: break-all;
+}
+
+.file-row-size {
+  margin-top: 0.18rem;
+  font-size: 0.82rem;
+  color: var(--ink-faint);
+}
+
+.file-row-action {
+  min-height: 2rem;
+  padding: 0 0.75rem;
+}
+
+.chart-shell {
+  padding: 1rem;
+}
+
+.chart-caption {
+  margin-top: 0.75rem;
+}
+
+@media (prefers-color-scheme: light) {
+  .job-state-banner {
+    background: rgba(18, 39, 61, 0.03);
+    border-color: rgba(18, 39, 61, 0.08);
+  }
+
+  .job-state-banner.danger {
+    background: rgba(196, 67, 67, 0.08);
+  }
+
+  .job-state-banner.success {
+    background: rgba(30, 138, 72, 0.08);
+  }
+
+  .job-fact,
+  .runtime-card {
+    background: rgba(255, 255, 255, 0.6);
+    border-color: rgba(18, 39, 61, 0.08);
+  }
+
+  .file-row {
+    border-color: rgba(18, 39, 61, 0.08);
+  }
+}
+
+@media (max-width: 1180px) {
+  .job-detail-shell {
+    grid-template-columns: 1fr;
+  }
+
+  .job-overview-facts {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .topbar-actions {
+    justify-content: flex-start;
+  }
+}
+
+@media (max-width: 860px) {
+  .topbar {
+    padding: 1rem 1rem 0.5rem;
+  }
+
+  .content-scroll {
+    padding: 0.5rem 1rem 1.25rem;
+  }
+
+  .job-state-banner,
+  .job-progress-head,
+  .file-row {
+    grid-template-columns: 1fr;
+  }
+
+  .job-state-banner,
+  .job-progress-head {
+    display: grid;
+  }
+
+  .job-overview-facts {
+    grid-template-columns: 1fr;
+  }
+
+  .job-log-large {
+    min-height: 20rem;
+    height: 50vh;
+  }
+}

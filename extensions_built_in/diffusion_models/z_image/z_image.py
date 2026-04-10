@@ -23,6 +23,7 @@ from diffusers import AutoencoderKL
 #region 추가
 import gc
 import traceback
+import random
 #endregion
 
 try:
@@ -217,23 +218,31 @@ class ZImageModel(BaseModel):
             quantize_model(self, transformer)
             flush()
         
-        #region 추가
+        #region 변경
         if (
             self.model_config.layer_offloading
             and self.model_config.layer_offloading_transformer_percent > 0
         ):
+            mm_seed = int(load_cfg.get("memory_manager_seed", 1337))
             self.print_and_status_update(
-                f"Attaching MemoryManager to transformer ({self.model_config.layer_offloading_transformer_percent:.2f})"
+                f"Attaching MemoryManager to transformer ({self.model_config.layer_offloading_transformer_percent:.2f}, seed={mm_seed})"
             )
-            MemoryManager.attach(
-                transformer,
-                self.device_torch,
-                offload_percent=self.model_config.layer_offloading_transformer_percent,
-                ignore_modules=[
-                    transformer.x_pad_token,
-                    transformer.cap_pad_token,
-                ],
-            )
+
+            prev_random_state = random.getstate()
+            try:
+                random.seed(mm_seed)
+                MemoryManager.attach(
+                    transformer,
+                    self.device_torch,
+                    offload_percent=self.model_config.layer_offloading_transformer_percent,
+                    ignore_modules=[
+                        transformer.x_pad_token,
+                        transformer.cap_pad_token,
+                    ],
+                )
+            finally:
+                random.setstate(prev_random_state)
+
             flush()
         #endregion
 
