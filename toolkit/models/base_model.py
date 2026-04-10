@@ -510,9 +510,6 @@ class BaseModel:
                         )
 
                     #region 디스크 캐시 지원
-                    # if self.sample_prompts_cache is not None:
-                    #     conditional_embeds = self.sample_prompts_cache[i]['conditional'].to(self.device_torch, dtype=self.torch_dtype)
-                    #     unconditional_embeds = self.sample_prompts_cache[i]['unconditional'].to(self.device_torch, dtype=self.torch_dtype)
                     if self.sample_prompts_cache is not None:
                         cache_item = self.sample_prompts_cache[i]
 

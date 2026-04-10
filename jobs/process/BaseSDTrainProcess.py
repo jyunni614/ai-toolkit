@@ -1682,6 +1682,10 @@ class BaseSDTrainProcess(BaseTrainProcess):
             print_acc("Pre-caching sample prompts before transformer load")
             self.cache_sample_prompts()
 
+        print_acc("Freeing memory after sample prompt pre-cache")
+        gc.collect()
+        flush()
+
         if (
             use_zimage_cache_bootstrap
             and self.train_config.cache_text_embeddings

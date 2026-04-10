@@ -202,6 +202,9 @@ class SDTrainer(BaseSDTrainProcess):
 
             del positive, negative
             flush()
+            
+        print_acc(f"sample_prompts_cache[0] keys = {list(self.sd.sample_prompts_cache[0].keys())}")
+        flush()
 
     def before_dataset_load(self):
         self.assistant_adapter = None
