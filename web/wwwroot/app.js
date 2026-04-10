@@ -10,7 +10,7 @@ const state = {
   settings: null,
   editor: null,
   jobDetail: null,
-  datasets: { list: [], currentName: null, images: [], selectedImage: null, caption: '', stashUploads: [] },
+  datasets: { list: [], currentName: null, images: [], selectedImage: null, caption: '', stashUploads: [], uploads: { dataset: null, stash: null } },
   viewState: { jobLog: null },
 };
 
@@ -345,6 +345,7 @@ async function loadDatasets() {
     selectedImage,
     caption,
     stashUploads: state.datasets?.stashUploads || [],
+    uploads: state.datasets?.uploads || { dataset: null, stash: null },
   };
 }
 
@@ -786,6 +787,18 @@ function renderSimpleJobEditor(editor, settings) {
   const selectedDataset = datasetOptions.some((item) => item.value === dataset.folder_path) ? dataset.folder_path : '';
   const samplePrompts = (process.sample.samples || []).map((item) => item.prompt || '').join('\n');
   const gpuChoices = renderGpuDataList(editor);
+  const isMac = Boolean(editor?.gpuInfo?.isMac || state.overview.gpu?.isMac);
+  const supportsLowVram = hasAdditionalSection(modelOption, 'model.low_vram') || Boolean(process.model.low_vram);
+  const supportsLayerOffloading = !isMac && (hasAdditionalSection(modelOption, 'model.layer_offloading') || 'layer_offloading' in process.model);
+  const supportsAssistantLora = hasAdditionalSection(modelOption, 'model.assistant_lora_path') || Boolean(process.model.assistant_lora_path);
+  const disableConvRank = isSectionDisabled(modelOption, 'network.conv');
+  const disableTimestepType = isSectionDisabled(modelOption, 'train.timestep_type');
+  const disableUnloadTe = isSectionDisabled(modelOption, 'train.unload_text_encoder');
+  const resolutions = new Set((dataset.resolution || []).map((value) => parseInt(value, 10)).filter((value) => Number.isFinite(value)));
+  const layerOffloadTransformer = Math.round((process.model.layer_offloading_transformer_percent ?? 0.7) * 100);
+  const layerOffloadTextEncoder = Math.round((process.model.layer_offloading_text_encoder_percent ?? 0.3) * 100);
+  const networkType = process.network?.type || 'lora';
+  const lokrFactor = process.network?.lokr_factor ?? -1;
 
   return `
     <form id="job-editor-form" class="stack">
@@ -817,6 +830,7 @@ function renderSimpleJobEditor(editor, settings) {
             <input id="trigger-word" name="triggerWord" value="${escapeHtml(process.trigger_word || '')}" placeholder="Optional token">
           </div>
         </div>
+
         <div class="panel">
           <div class="surface-header">
             <h3>Model</h3>
@@ -832,7 +846,12 @@ function renderSimpleJobEditor(editor, settings) {
             <label class="field-label" for="model-name-or-path">Name Or Path</label>
             <input id="model-name-or-path" name="modelNameOrPath" value="${escapeHtml(process.model.name_or_path || '')}" placeholder="ostris/Flex.1-alpha">
           </div>
-          <div class="simple-grid-3">
+          ${supportsAssistantLora ? `
+            <div class="field">
+              <label class="field-label" for="assistant-lora-path">Assistant LoRA Path</label>
+              <input id="assistant-lora-path" name="assistantLoraPath" value="${escapeHtml(process.model.assistant_lora_path || '')}" placeholder="Optional helper adapter">
+            </div>` : ''}
+          <div class="simple-grid-2">
             <div class="field">
               <label class="field-label" for="transformer-quant">Transformer Quant</label>
               <select id="transformer-quant" name="transformerQuant" ${modelOption?.disableQuantize ? 'disabled' : ''}>
@@ -845,15 +864,87 @@ function renderSimpleJobEditor(editor, settings) {
                 ${renderSelectOptions(QUANTIZATION_OPTIONS, process.model.quantize_te ? process.model.qtype_te : '')}
               </select>
             </div>
-            <div class="field">
-              <label class="field-label">Options</label>
-              <label class="toggle-row">
-                <input type="checkbox" name="lowVram" ${process.model.low_vram ? 'checked' : ''}>
-                <span>Low VRAM</span>
-              </label>
-            </div>
           </div>
+          <div class="simple-grid-2">
+            ${supportsLowVram ? `
+              <div class="field">
+                <label class="field-label">Options</label>
+                <label class="toggle-row compact-toggle">
+                  <input type="checkbox" name="lowVram" ${process.model.low_vram ? 'checked' : ''}>
+                  <span>Low VRAM</span>
+                </label>
+              </div>` : ''}
+            ${supportsLayerOffloading ? `
+              <div class="field">
+                <label class="field-label">Offloading</label>
+                <label class="toggle-row compact-toggle">
+                  <input type="checkbox" name="layerOffloading" ${process.model.layer_offloading ? 'checked' : ''}>
+                  <span>Layer Offloading</span>
+                </label>
+              </div>` : ''}
+          </div>
+          ${supportsLayerOffloading ? `
+            <div class="simple-grid-2">
+              <div class="field">
+                <label class="field-label" for="layer-offloading-transformer">Transformer Offload %</label>
+                <input id="layer-offloading-transformer" name="layerOffloadingTransformerPercent" type="number" min="0" max="100" value="${escapeHtml(layerOffloadTransformer)}">
+              </div>
+              <div class="field">
+                <label class="field-label" for="layer-offloading-text-encoder">Text Encoder Offload %</label>
+                <input id="layer-offloading-text-encoder" name="layerOffloadingTextEncoderPercent" type="number" min="0" max="100" value="${escapeHtml(layerOffloadTextEncoder)}">
+              </div>
+            </div>
+            <div class="field-help">Qwen-Image and Z-Image families in the original UI exposed layer offloading here. This version writes the same config keys.</div>` : ''}
         </div>
+
+        <div class="panel">
+          <div class="surface-header">
+            <h3>Target</h3>
+            <span class="badge">LoRA shape</span>
+          </div>
+          <div class="simple-grid-2">
+            <div class="field">
+              <label class="field-label" for="network-type">Target Type</label>
+              <select id="network-type" name="networkType">
+                ${renderSelectOptions(TARGET_TYPE_OPTIONS, networkType)}
+              </select>
+            </div>
+            ${networkType === 'lokr' ? `
+              <div class="field">
+                <label class="field-label" for="lokr-factor">LoKr Factor</label>
+                <select id="lokr-factor" name="lokrFactor">
+                  ${renderSelectOptions([
+                    { value: '-1', label: 'Auto' },
+                    { value: '4', label: '4' },
+                    { value: '8', label: '8' },
+                    { value: '16', label: '16' },
+                    { value: '32', label: '32' },
+                  ], String(lokrFactor))}
+                </select>
+              </div>` : ''}
+          </div>
+          ${networkType === 'lora' ? `
+            <div class="simple-grid-4">
+              <div class="field">
+                <label class="field-label" for="linear-rank">Linear Rank</label>
+                <input id="linear-rank" name="linearRank" type="number" min="0" max="1024" value="${escapeHtml(process.network?.linear ?? 32)}">
+              </div>
+              <div class="field">
+                <label class="field-label" for="linear-alpha">Linear Alpha</label>
+                <input id="linear-alpha" name="linearAlpha" type="number" min="0" max="1024" value="${escapeHtml(process.network?.linear_alpha ?? process.network?.linear ?? 32)}">
+              </div>
+              ${disableConvRank ? `<div class="field-help form-note">This model keeps conv rank disabled in the original simple UI.</div>` : `
+                <div class="field">
+                  <label class="field-label" for="conv-rank">Conv Rank</label>
+                  <input id="conv-rank" name="convRank" type="number" min="0" max="1024" value="${escapeHtml(process.network?.conv ?? 16)}">
+                </div>
+                <div class="field">
+                  <label class="field-label" for="conv-alpha">Conv Alpha</label>
+                  <input id="conv-alpha" name="convAlpha" type="number" min="0" max="1024" value="${escapeHtml(process.network?.conv_alpha ?? process.network?.conv ?? 16)}">
+                </div>`}
+            </div>` : ''}
+        </div>
+
         <div class="panel">
           <div class="surface-header">
             <h3>Training</h3>
@@ -861,79 +952,180 @@ function renderSimpleJobEditor(editor, settings) {
           </div>
           <div class="simple-grid-3">
             <div class="field">
-              <label class="field-label" for="steps">Steps</label>
-              <input id="steps" name="steps" type="number" min="1" value="${escapeHtml(process.train.steps)}">
-            </div>
-            <div class="field">
               <label class="field-label" for="batch-size">Batch Size</label>
               <input id="batch-size" name="batchSize" type="number" min="1" value="${escapeHtml(process.train.batch_size)}">
             </div>
             <div class="field">
-              <label class="field-label" for="grad-accum">Grad Accum</label>
-              <input id="grad-accum" name="gradAccum" type="number" min="1" value="${escapeHtml(process.train.gradient_accumulation || 1)}">
+              <label class="field-label" for="optimizer">Optimizer</label>
+              <select id="optimizer" name="optimizer">
+                ${renderSelectOptions(OPTIMIZER_OPTIONS, process.train.optimizer || 'adamw8bit')}
+              </select>
+            </div>
+            <div class="field">
+              <label class="field-label" for="steps">Steps</label>
+              <input id="steps" name="steps" type="number" min="1" value="${escapeHtml(process.train.steps)}">
             </div>
           </div>
           <div class="simple-grid-3">
+            <div class="field">
+              <label class="field-label" for="grad-accum">Gradient Accumulation</label>
+              <input id="grad-accum" name="gradAccum" type="number" min="1" value="${escapeHtml(process.train.gradient_accumulation || 1)}">
+            </div>
             <div class="field">
               <label class="field-label" for="learning-rate">Learning Rate</label>
               <input id="learning-rate" name="learningRate" type="number" step="0.000001" min="0" value="${escapeHtml(process.train.lr)}">
             </div>
             <div class="field">
+              <label class="field-label" for="weight-decay">Weight Decay</label>
+              <input id="weight-decay" name="weightDecay" type="number" step="0.000001" min="0" value="${escapeHtml(process.train.optimizer_params?.weight_decay ?? 0.0001)}">
+            </div>
+          </div>
+          <div class="simple-grid-3">
+            <div class="field">
+              <label class="field-label" for="timestep-type">Timestep Type</label>
+              <select id="timestep-type" name="timestepType" ${disableTimestepType ? 'disabled' : ''}>
+                ${renderSelectOptions(TIMESTEP_TYPE_OPTIONS, process.train.timestep_type || 'sigmoid')}
+              </select>
+            </div>
+            <div class="field">
+              <label class="field-label" for="timestep-bias">Timestep Bias</label>
+              <select id="timestep-bias" name="timestepBias">
+                ${renderSelectOptions(TIMESTEP_BIAS_OPTIONS, process.train.content_or_style || 'balanced')}
+              </select>
+            </div>
+            <div class="field">
+              <label class="field-label" for="loss-type">Loss Type</label>
+              <select id="loss-type" name="lossType">
+                ${renderSelectOptions(LOSS_TYPE_OPTIONS, process.train.loss_type || 'mse')}
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="surface-header">
+            <h3>EMA And Save</h3>
+            <span class="badge info">Training stability</span>
+          </div>
+          <div class="simple-grid-3">
+            <div class="field">
+              <label class="field-label">EMA</label>
+              <label class="toggle-row compact-toggle">
+                <input type="checkbox" name="useEma" ${process.train.ema_config?.use_ema ? 'checked' : ''}>
+                <span>Use EMA</span>
+              </label>
+            </div>
+            <div class="field">
+              <label class="field-label" for="ema-decay">EMA Decay</label>
+              <input id="ema-decay" name="emaDecay" type="number" step="0.001" min="0" value="${escapeHtml(process.train.ema_config?.ema_decay ?? 0.99)}">
+            </div>
+            <div class="field">
+              <label class="field-label" for="save-dtype">Save DType</label>
+              <select id="save-dtype" name="saveDtype">
+                ${renderSelectOptions(SAVE_DTYPE_OPTIONS, process.save.dtype || 'bf16')}
+              </select>
+            </div>
+          </div>
+          <div class="simple-grid-3">
+            <div class="field">
               <label class="field-label" for="save-every">Save Every</label>
               <input id="save-every" name="saveEvery" type="number" min="1" value="${escapeHtml(process.save.save_every)}">
             </div>
             <div class="field">
-              <label class="field-label" for="max-saves">Keep Last</label>
+              <label class="field-label" for="max-saves">Max Step Saves To Keep</label>
               <input id="max-saves" name="maxSaves" type="number" min="1" value="${escapeHtml(process.save.max_step_saves_to_keep)}">
             </div>
-          </div>
-          <div class="field">
-            <label class="field-label" for="save-dtype">Save DType</label>
-            <select id="save-dtype" name="saveDtype">
-              ${renderSelectOptions(SAVE_DTYPE_OPTIONS, process.save.dtype || 'bf16')}
-            </select>
+            <div class="field simple-toggle-stack">
+              <label class="field-label">Text Encoder Optimizations</label>
+              ${disableUnloadTe ? '' : `
+                <label class="toggle-row compact-toggle">
+                  <input type="checkbox" name="unloadTextEncoder" ${process.train.unload_text_encoder ? 'checked' : ''}>
+                  <span>Unload TE</span>
+                </label>`}
+              <label class="toggle-row compact-toggle">
+                <input type="checkbox" name="cacheTextEmbeddings" ${process.train.cache_text_embeddings ? 'checked' : ''}>
+                <span>Cache Text Embeddings</span>
+              </label>
+            </div>
           </div>
         </div>
-        <div class="panel">
+
+        <div class="panel simple-editor-wide">
           <div class="surface-header">
             <h3>Dataset</h3>
             <span class="badge">${escapeHtml(String(datasetOptions.length))} presets</span>
           </div>
-          <div class="field">
-            <label class="field-label" for="dataset-preset">Quick Pick</label>
-            <select id="dataset-preset" name="datasetPreset" data-change="simple-dataset-preset">
-              <option value="">Select a known dataset</option>
-              ${datasetOptions.map((item) => `<option value="${escapeHtml(item.value)}" ${item.value === selectedDataset ? 'selected' : ''}>${escapeHtml(item.label)}</option>`).join('')}
-            </select>
-          </div>
-          <div class="field">
-            <label class="field-label" for="dataset-path">Dataset Folder</label>
-            <input id="dataset-path" name="datasetPath" value="${escapeHtml(dataset.folder_path || '')}" placeholder="${escapeHtml(settings?.datasetsFolder || 'Dataset path')}">
-          </div>
           <div class="simple-grid-3">
+            <div class="field">
+              <label class="field-label" for="dataset-preset">Quick Pick</label>
+              <select id="dataset-preset" name="datasetPreset" data-change="simple-dataset-preset">
+                <option value="">Select a known dataset</option>
+                ${datasetOptions.map((item) => `<option value="${escapeHtml(item.value)}" ${item.value === selectedDataset ? 'selected' : ''}>${escapeHtml(item.label)}</option>`).join('')}
+              </select>
+            </div>
+            <div class="field">
+              <label class="field-label" for="dataset-path">Dataset Folder</label>
+              <input id="dataset-path" name="datasetPath" value="${escapeHtml(dataset.folder_path || '')}" placeholder="${escapeHtml(settings?.datasetsFolder || 'Dataset path')}">
+            </div>
+            <div class="field">
+              <label class="field-label" for="default-caption">Default Caption</label>
+              <input id="default-caption" name="defaultCaption" value="${escapeHtml(dataset.default_caption || '')}" placeholder="Optional caption prefix">
+            </div>
+          </div>
+          <div class="simple-grid-4">
+            <div class="field">
+              <label class="field-label" for="dataset-network-weight">LoRA Weight</label>
+              <input id="dataset-network-weight" name="datasetNetworkWeight" type="number" step="0.1" min="0" value="${escapeHtml(dataset.network_weight ?? 1)}">
+            </div>
+            <div class="field">
+              <label class="field-label" for="dataset-repeats">Num Repeats</label>
+              <input id="dataset-repeats" name="datasetRepeats" type="number" min="1" value="${escapeHtml(dataset.num_repeats || 1)}">
+            </div>
+            <div class="field">
+              <label class="field-label" for="caption-dropout">Caption Dropout Rate</label>
+              <input id="caption-dropout" name="captionDropout" type="number" step="0.01" min="0" max="1" value="${escapeHtml(dataset.caption_dropout_rate || 0)}">
+            </div>
             <div class="field">
               <label class="field-label" for="caption-ext">Caption Ext</label>
               <input id="caption-ext" name="captionExt" value="${escapeHtml((dataset.caption_ext || 'txt').replace(/^\./, ''))}" placeholder="txt">
             </div>
-            <div class="field">
-              <label class="field-label" for="dataset-repeats">Repeats</label>
-              <input id="dataset-repeats" name="datasetRepeats" type="number" min="1" value="${escapeHtml(dataset.num_repeats || 1)}">
+          </div>
+          <div class="simple-grid-2">
+            <div class="field simple-toggle-stack">
+              <label class="field-label">Dataset Settings</label>
+              <label class="toggle-row compact-toggle">
+                <input type="checkbox" name="cacheLatents" ${dataset.cache_latents_to_disk ? 'checked' : ''}>
+                <span>Cache Latents</span>
+              </label>
+              <label class="toggle-row compact-toggle">
+                <input type="checkbox" name="isReg" ${dataset.is_reg ? 'checked' : ''}>
+                <span>Is Regularization</span>
+              </label>
             </div>
-            <div class="field">
-              <label class="field-label" for="caption-dropout">Caption Dropout</label>
-              <input id="caption-dropout" name="captionDropout" type="number" step="0.01" min="0" max="1" value="${escapeHtml(dataset.caption_dropout_rate || 0)}">
+            <div class="field simple-toggle-stack">
+              <label class="field-label">Flipping</label>
+              <label class="toggle-row compact-toggle">
+                <input type="checkbox" name="flipX" ${dataset.flip_x ? 'checked' : ''}>
+                <span>Flip X</span>
+              </label>
+              <label class="toggle-row compact-toggle">
+                <input type="checkbox" name="flipY" ${dataset.flip_y ? 'checked' : ''}>
+                <span>Flip Y</span>
+              </label>
             </div>
           </div>
           <div class="field">
-            <label class="field-label" for="default-caption">Default Caption</label>
-            <input id="default-caption" name="defaultCaption" value="${escapeHtml(dataset.default_caption || '')}" placeholder="Optional caption prefix">
-          </div>
-          <div class="field">
-            <label class="field-label" for="dataset-resolution">Resolutions</label>
-            <input id="dataset-resolution" name="datasetResolution" value="${escapeHtml((dataset.resolution || []).join(', '))}" placeholder="512, 768, 1024">
-            <div class="field-help">Comma-separated values. This matches the old simple editor's common multi-resolution flow.</div>
+            <label class="field-label">Resolutions</label>
+            <div class="choice-grid">
+              ${DATASET_RESOLUTION_OPTIONS.map((value) => `
+                <label class="toggle-row compact-toggle resolution-toggle">
+                  <input type="checkbox" name="datasetResolution" value="${value}" ${resolutions.has(value) ? 'checked' : ''}>
+                  <span>${value}</span>
+                </label>`).join('')}
+            </div>
           </div>
         </div>
+
         <div class="hero-panel simple-editor-wide">
           <div class="hero-line">
             <h3>Sampling</h3>
@@ -953,7 +1145,7 @@ function renderSimpleJobEditor(editor, settings) {
               <input id="guidance-scale" name="guidanceScale" type="number" step="0.1" min="0" value="${escapeHtml(process.sample.guidance_scale)}">
             </div>
           </div>
-          <div class="simple-grid-3">
+          <div class="simple-grid-4">
             <div class="field">
               <label class="field-label" for="sample-width">Width</label>
               <input id="sample-width" name="sampleWidth" type="number" min="64" step="64" value="${escapeHtml(process.sample.width)}">
@@ -966,30 +1158,48 @@ function renderSimpleJobEditor(editor, settings) {
               <label class="field-label" for="sample-steps">Sample Steps</label>
               <input id="sample-steps" name="sampleSteps" type="number" min="1" value="${escapeHtml(process.sample.sample_steps)}">
             </div>
-          </div>
-          <div class="simple-grid-3">
             <div class="field">
               <label class="field-label" for="sample-seed">Seed</label>
               <input id="sample-seed" name="sampleSeed" type="number" value="${escapeHtml(process.sample.seed)}">
             </div>
+          </div>
+          <div class="simple-grid-4">
             <div class="field">
               <label class="field-label">Walk Seed</label>
-              <label class="toggle-row">
+              <label class="toggle-row compact-toggle">
                 <input type="checkbox" name="walkSeed" ${process.sample.walk_seed ? 'checked' : ''}>
                 <span>Offset seed per prompt</span>
               </label>
             </div>
             <div class="field">
-              <label class="field-label">Mode Hint</label>
-              <div class="field-help form-note">If you need per-sample width, height, seeds, or control images, switch to Advanced JSON.</div>
+              <label class="field-label">Advanced Sampling</label>
+              <label class="toggle-row compact-toggle">
+                <input type="checkbox" name="skipFirstSample" ${process.train.skip_first_sample ? 'checked' : ''}>
+                <span>Skip First Sample</span>
+              </label>
+            </div>
+            <div class="field">
+              <label class="field-label">Advanced Sampling</label>
+              <label class="toggle-row compact-toggle">
+                <input type="checkbox" name="forceFirstSample" ${process.train.force_first_sample ? 'checked' : ''}>
+                <span>Force First Sample</span>
+              </label>
+            </div>
+            <div class="field">
+              <label class="field-label">Advanced Sampling</label>
+              <label class="toggle-row compact-toggle">
+                <input type="checkbox" name="disableSampling" ${process.train.disable_sampling ? 'checked' : ''}>
+                <span>Disable Sampling</span>
+              </label>
             </div>
           </div>
           <div class="field">
             <label class="field-label" for="sample-prompts">Sample Prompts</label>
             <textarea id="sample-prompts" class="simple-prompts" name="samplePrompts" spellcheck="false">${escapeHtml(samplePrompts)}</textarea>
-            <div class="field-help">One prompt per line, just like the old simple workflow.</div>
+            <div class="field-help">This now includes the original simple UI switches for skipping the first sample, forcing it, or disabling sampling entirely.</div>
           </div>
         </div>
+
         ${process.type === 'concept_slider' ? `
           <div class="panel simple-editor-wide">
             <div class="surface-header">
@@ -1034,7 +1244,6 @@ function renderSimpleJobEditor(editor, settings) {
     </form>
   `;
 }
-
 function renderGpuDataList(editor) {
   if (editor?.gpuInfo?.isMac) {
     return '<datalist id="gpu-id-options"><option value="mps">Apple GPU (mps)</option></datalist>';
@@ -1100,6 +1309,7 @@ function renderJobDetailView() {
               <div class="kv-value">${escapeHtml(formatDate(job.updatedAt))}</div>
             </div>
           </div>
+          ${renderJobRuntimeSummary(job)}
         </div>
         <div class="panel">
           <div class="surface-header">
@@ -1113,7 +1323,7 @@ function renderJobDetailView() {
           ${renderLossChart(detail.loss)}
         </div>
       </section>
-      <section class="detail-grid" style="margin-top:18px;">
+      <section class="detail-grid section-spaced">
         <div class="panel">
           <div class="surface-header">
             <h3>Live Log</h3>
@@ -1141,7 +1351,7 @@ function renderJobDetailView() {
             : renderEmptyState('No model checkpoints found yet.')}
         </div>
       </section>
-      <section class="panel" style="margin-top:18px;">
+      <section class="panel section-spaced">
         <div class="surface-header">
           <h3>Samples</h3>
           <div class="inline-actions">
@@ -1154,10 +1364,11 @@ function renderJobDetailView() {
     `,
   };
 }
-
 function renderDatasetsView() {
   const datasets = state.datasets;
   const selectedItem = datasets.images.find((item) => item.imgPath === datasets.selectedImage);
+  const datasetUpload = datasets.uploads?.dataset || null;
+  const stashUpload = datasets.uploads?.stash || null;
   return {
     title: 'Datasets',
     subtitle: 'Recursive media browse, caption sidecars, and direct uploads into either a dataset folder or the shared data/images pool.',
@@ -1191,20 +1402,22 @@ function renderDatasetsView() {
             </div>
             ${datasets.currentName ? `
               <div class="button-row">
-                <form id="dataset-upload-form">
+                <form id="dataset-upload-form" class="upload-form">
                   <input type="hidden" name="datasetName" value="${escapeHtml(datasets.currentName)}">
                   <div class="field">
                     <label class="field-label">Upload Into Dataset</label>
                     <input type="file" name="files" multiple required>
                   </div>
-                  <button class="button" type="submit">Upload files</button>
+                  <button class="button" type="submit" ${datasetUpload?.busy ? 'disabled' : ''}>${datasetUpload?.busy ? 'Uploading...' : 'Upload files'}</button>
+                  ${renderUploadProgress(datasetUpload, 'Selected files will upload directly into this dataset.')}
                 </form>
-                <form id="stash-upload-form">
+                <form id="stash-upload-form" class="upload-form">
                   <div class="field">
                     <label class="field-label">Upload Into data/images</label>
                     <input type="file" name="files" multiple required>
                   </div>
-                  <button class="secondary-button" type="submit">Upload stash files</button>
+                  <button class="secondary-button" type="submit" ${stashUpload?.busy ? 'disabled' : ''}>${stashUpload?.busy ? 'Uploading...' : 'Upload stash files'}</button>
+                  ${renderUploadProgress(stashUpload, 'Useful for parking files before you sort them into a dataset.')}
                 </form>
               </div>` : renderEmptyState('Create or select a dataset to browse its media.')}
           </div>
@@ -1405,6 +1618,94 @@ function renderCpuPanel(cpu) {
   `;
 }
 
+function renderJobRuntimeSummary(job) {
+  const cards = [];
+  const cpu = state.overview.cpu;
+  if (cpu) {
+    const total = Number(cpu.totalMemory) || 0;
+    const available = Number(cpu.availableMemory) || 0;
+    const used = Math.max(0, total - available);
+    const load = Number(cpu.currentLoad) || 0;
+    cards.push(renderRuntimeStatCard({
+      title: 'CPU',
+      subtitle: cpu.name || 'System CPU',
+      load,
+      loadLabel: `Load ${formatNumber(load)}%`,
+      memoryLabel: total ? `RAM ${formatNumber(used)} / ${formatNumber(total)} MB` : 'RAM telemetry unavailable',
+    }));
+  }
+
+  const gpuInfo = state.overview.gpu;
+  const requestedGpuIds = String(job.gpuIds || '')
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean);
+
+  if (gpuInfo?.isMac && (requestedGpuIds.includes('mps') || !requestedGpuIds.length)) {
+    const appleGpu = gpuInfo.gpus?.[0];
+    cards.push(renderRuntimeStatCard({
+      title: 'GPU mps',
+      subtitle: appleGpu?.name || 'Apple GPU',
+      load: appleGpu?.utilization?.gpu || 0,
+      loadLabel: 'Unified GPU telemetry is limited on macOS',
+      memoryLabel: appleGpu?.memory?.total ? `VRAM ${formatNumber(appleGpu.memory.used || 0)} / ${formatNumber(appleGpu.memory.total)} MB` : 'Unified memory only',
+    }));
+  }
+
+  for (const gpu of gpuInfo?.gpus || []) {
+    if (gpuInfo?.isMac) {
+      continue;
+    }
+
+    const gpuId = String(gpu.index);
+    if (requestedGpuIds.length && !requestedGpuIds.includes(gpuId)) {
+      continue;
+    }
+
+    const used = Number(gpu.memory?.used) || 0;
+    const total = Number(gpu.memory?.total) || 0;
+    const load = Number(gpu.utilization?.gpu) || 0;
+    cards.push(renderRuntimeStatCard({
+      title: `GPU ${gpuId}`,
+      subtitle: gpu.name || `GPU ${gpuId}`,
+      load,
+      loadLabel: `Load ${formatNumber(load)}%`,
+      memoryLabel: total ? `VRAM ${formatNumber(used)} / ${formatNumber(total)} MB` : 'VRAM telemetry unavailable',
+    }));
+  }
+
+  if (!cards.length) {
+    return '';
+  }
+
+  return `
+    <div class="job-runtime-summary">
+      <div class="surface-header compact-header">
+        <h3>System Snapshot</h3>
+        <span class="badge info">Live overview telemetry</span>
+      </div>
+      <div class="runtime-grid">
+        ${cards.join('')}
+      </div>
+    </div>`;
+}
+
+function renderRuntimeStatCard({ title, subtitle, load, loadLabel, memoryLabel }) {
+  const clampedLoad = Number.isFinite(load) ? Math.max(0, Math.min(100, load)) : 0;
+  return `
+    <div class="runtime-card">
+      <div class="runtime-card-head">
+        <div>
+          <div class="runtime-title">${escapeHtml(title)}</div>
+          <div class="runtime-subtitle">${escapeHtml(subtitle || '')}</div>
+        </div>
+        <div class="runtime-load">${escapeHtml(Number.isFinite(load) ? `${formatNumber(load)}%` : 'n/a')}</div>
+      </div>
+      <div class="progress-track runtime-track"><div class="progress-bar" style="width:${clampedLoad}%"></div></div>
+      <div class="runtime-meta">${escapeHtml(loadLabel || '')}</div>
+      <div class="runtime-meta">${escapeHtml(memoryLabel || '')}</div>
+    </div>`;
+}
 function renderJobsTable(jobs) {
   if (!jobs.length) {
     return renderEmptyState('No jobs found.');
@@ -1575,7 +1876,7 @@ function renderLossChart(loss) {
         <polyline fill="none" stroke="rgba(142,240,141,0.92)" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" points="${polyline}"></polyline>
       </svg>
       <div class="chart-caption">
-        <span>${escapeHtml(loss.key || 'loss')} � ${points.length} points</span>
+        <span>${escapeHtml(loss.key || 'loss')} ï¿½ ${points.length} points</span>
         <span>min ${formatNumber(min)} / max ${formatNumber(max)}</span>
       </div>
     </div>
@@ -1920,31 +2221,123 @@ async function handleSubmit(form, submitter) {
         window.location.hash = `#/datasets/${encodeURIComponent(payload.name)}`;
       });
       return;
-    case 'dataset-upload-form':
-      await runAction(async () => {
-        const formData = new FormData(form);
-        const response = await fetchJson('/api/datasets/upload', {
-          method: 'POST',
-          body: formData,
+    case 'dataset-upload-form': {
+      const formData = new FormData(form);
+      const files = formData.getAll('files').filter((item) => item instanceof File && item.size >= 0);
+      if (!files.length) {
+        showToast('Choose one or more files to upload.', 'error');
+        return;
+      }
+
+      const total = files.reduce((sum, file) => sum + (file.size || 0), 0);
+      try {
+        setDatasetUploadState('dataset', {
+          label: 'Dataset upload',
+          status: 'Uploading files',
+          loaded: 0,
+          total,
+          percent: 0,
+          busy: true,
+          done: false,
         });
-        showToast(`${response.files?.length || 0} files uploaded.`);
+        render();
+
+        const response = await uploadJsonWithProgress('/api/datasets/upload', formData, {
+          onProgress: (progress) => {
+            setDatasetUploadState('dataset', {
+              label: 'Dataset upload',
+              status: 'Uploading files',
+              loaded: progress.loaded,
+              total: progress.total ?? total,
+              percent: progress.percent,
+              busy: true,
+              done: false,
+            });
+            render();
+          },
+        });
+
+        setDatasetUploadState('dataset', {
+          label: 'Dataset upload',
+          status: 'Refreshing dataset',
+          loaded: total,
+          total,
+          percent: 100,
+          busy: false,
+          done: true,
+        });
+        render();
+
+        showToast(`${response?.files?.length || 0} files uploaded.`);
         await loadDatasets();
+        setDatasetUploadState('dataset', null);
+        form.reset();
         render();
-      });
+      } catch (error) {
+        console.error(error);
+        setDatasetUploadState('dataset', null);
+        render();
+        showToast(error.message || 'Upload failed.', 'error');
+      }
       return;
-    case 'stash-upload-form':
-      await runAction(async () => {
-        const formData = new FormData(form);
-        const response = await fetchJson('/api/img/upload', {
-          method: 'POST',
-          body: formData,
+    }
+    case 'stash-upload-form': {
+      const formData = new FormData(form);
+      const files = formData.getAll('files').filter((item) => item instanceof File && item.size >= 0);
+      if (!files.length) {
+        showToast('Choose one or more files to upload.', 'error');
+        return;
+      }
+
+      const total = files.reduce((sum, file) => sum + (file.size || 0), 0);
+      try {
+        setDatasetUploadState('stash', {
+          label: 'Stash upload',
+          status: 'Uploading files',
+          loaded: 0,
+          total,
+          percent: 0,
+          busy: true,
+          done: false,
         });
-        state.datasets.stashUploads = response.files || [];
-        showToast(`${state.datasets.stashUploads.length} stash files uploaded.`);
         render();
-      });
+
+        const response = await uploadJsonWithProgress('/api/img/upload', formData, {
+          onProgress: (progress) => {
+            setDatasetUploadState('stash', {
+              label: 'Stash upload',
+              status: 'Uploading files',
+              loaded: progress.loaded,
+              total: progress.total ?? total,
+              percent: progress.percent,
+              busy: true,
+              done: false,
+            });
+            render();
+          },
+        });
+
+        state.datasets.stashUploads = response?.files || [];
+        setDatasetUploadState('stash', {
+          label: 'Stash upload',
+          status: 'Upload complete',
+          loaded: total,
+          total,
+          percent: 100,
+          busy: false,
+          done: true,
+        });
+        showToast(`${state.datasets.stashUploads.length} stash files uploaded.`);
+        form.reset();
+        render();
+      } catch (error) {
+        console.error(error);
+        setDatasetUploadState('stash', null);
+        render();
+        showToast(error.message || 'Upload failed.', 'error');
+      }
       return;
-    case 'caption-form':
+    }    case 'caption-form':
       await runAction(async () => {
         const formData = new FormData(form);
         await fetchJson('/api/img/caption', {
@@ -2035,6 +2428,113 @@ async function readError(response) {
   return text || 'Request failed';
 }
 
+function hasAdditionalSection(modelOption, section) {
+  return Boolean(modelOption?.additionalSections?.includes(section));
+}
+
+function isSectionDisabled(modelOption, section) {
+  return Boolean(modelOption?.disableSections?.includes(section));
+}
+
+function setDatasetUploadState(key, value) {
+  state.datasets.uploads = state.datasets.uploads || { dataset: null, stash: null };
+  state.datasets.uploads[key] = value;
+}
+
+function renderUploadProgress(upload, idleLabel) {
+  if (!upload) {
+    return `<div class="upload-progress idle">${escapeHtml(idleLabel)}</div>`;
+  }
+
+  const percent = Number.isFinite(upload.percent) ? Math.max(0, Math.min(100, upload.percent)) : (upload.done ? 100 : 0);
+  const detail = upload.total
+    ? `${formatBytes(upload.loaded || 0)} / ${formatBytes(upload.total)}`
+    : upload.loaded
+      ? `${formatBytes(upload.loaded)}`
+      : 'Preparing files';
+
+  return `
+    <div class="upload-progress ${upload.done ? 'done' : ''}">
+      <div class="upload-progress-meta">
+        <strong>${escapeHtml(upload.label || 'Upload')}</strong>
+        <span>${Number.isFinite(upload.percent) ? `${percent.toFixed(0)}%` : escapeHtml(upload.status || 'Uploading')}</span>
+      </div>
+      <div class="upload-progress-track"><div class="upload-progress-bar" style="width:${percent}%"></div></div>
+      <div class="upload-progress-meta subtle">
+        <span>${escapeHtml(upload.status || 'Uploading')}</span>
+        <span>${escapeHtml(detail)}</span>
+      </div>
+    </div>`;
+}
+
+function readXhrError(xhr) {
+  try {
+    const payload = JSON.parse(xhr.responseText || '{}');
+    if (payload?.error) {
+      return payload.error;
+    }
+  } catch {}
+  return xhr.responseText || xhr.statusText || 'Request failed';
+}
+
+function uploadJsonWithProgress(url, formData, options = {}) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open(options.method || 'POST', url, true);
+
+    const token = localStorage.getItem('AI_TOOLKIT_AUTH');
+    if (!options.allowAnonymous && token) {
+      xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+    }
+
+    xhr.upload.addEventListener('progress', (event) => {
+      if (!options.onProgress) {
+        return;
+      }
+
+      const percent = event.lengthComputable && event.total > 0
+        ? (event.loaded / event.total) * 100
+        : Number.NaN;
+
+      options.onProgress({
+        loaded: event.loaded,
+        total: event.lengthComputable ? event.total : null,
+        percent,
+      });
+    });
+
+    xhr.addEventListener('load', () => {
+      if (xhr.status === 401) {
+        localStorage.removeItem('AI_TOOLKIT_AUTH');
+        state.authorized = false;
+        render();
+      }
+
+      if (xhr.status < 200 || xhr.status >= 300) {
+        reject(new Error(readXhrError(xhr)));
+        return;
+      }
+
+      if (!xhr.responseText) {
+        resolve(null);
+        return;
+      }
+
+      try {
+        resolve(JSON.parse(xhr.responseText));
+      } catch (error) {
+        reject(new Error(error.message || 'Could not parse upload response.'));
+      }
+    });
+
+    xhr.addEventListener('error', () => {
+      reject(new Error('Upload failed.'));
+    });
+
+    xhr.send(formData);
+  });
+}
+
 function showToast(message, tone = 'success') {
   const node = document.createElement('div');
   node.className = `toast ${tone}`;
@@ -2114,7 +2614,11 @@ const SIMPLE_MODEL_ARCH_OPTIONS = [
       "config.process[0].model.quantize_te": true,
       "config.process[0].sample.sampler": "flowmatch",
       "config.process[0].train.noise_scheduler": "flowmatch"
-    }
+    },
+    "disableSections": [
+      "network.conv"
+    ],
+    "additionalSections": []
   },
   {
     "value": "flux_kontext",
@@ -2128,7 +2632,14 @@ const SIMPLE_MODEL_ARCH_OPTIONS = [
       "config.process[0].sample.sampler": "flowmatch",
       "config.process[0].train.noise_scheduler": "flowmatch",
       "config.process[0].train.timestep_type": "weighted"
-    }
+    },
+    "disableSections": [
+      "network.conv"
+    ],
+    "additionalSections": [
+      "datasets.control_path",
+      "sample.ctrl_img"
+    ]
   },
   {
     "value": "flex1",
@@ -2142,7 +2653,11 @@ const SIMPLE_MODEL_ARCH_OPTIONS = [
       "config.process[0].train.bypass_guidance_embedding": true,
       "config.process[0].sample.sampler": "flowmatch",
       "config.process[0].train.noise_scheduler": "flowmatch"
-    }
+    },
+    "disableSections": [
+      "network.conv"
+    ],
+    "additionalSections": []
   },
   {
     "value": "flex2",
@@ -2165,7 +2680,11 @@ const SIMPLE_MODEL_ARCH_OPTIONS = [
       "config.process[0].train.bypass_guidance_embedding": true,
       "config.process[0].sample.sampler": "flowmatch",
       "config.process[0].train.noise_scheduler": "flowmatch"
-    }
+    },
+    "disableSections": [
+      "network.conv"
+    ],
+    "additionalSections": []
   },
   {
     "value": "chroma",
@@ -2178,7 +2697,11 @@ const SIMPLE_MODEL_ARCH_OPTIONS = [
       "config.process[0].model.quantize_te": true,
       "config.process[0].sample.sampler": "flowmatch",
       "config.process[0].train.noise_scheduler": "flowmatch"
-    }
+    },
+    "disableSections": [
+      "network.conv"
+    ],
+    "additionalSections": []
   },
   {
     "value": "zeta_chroma",
@@ -2192,7 +2715,11 @@ const SIMPLE_MODEL_ARCH_OPTIONS = [
       "config.process[0].model.quantize_te": true,
       "config.process[0].sample.sampler": "flowmatch",
       "config.process[0].train.noise_scheduler": "flowmatch"
-    }
+    },
+    "disableSections": [
+      "network.conv"
+    ],
+    "additionalSections": []
   },
   {
     "value": "wan21:1b",
@@ -2207,7 +2734,14 @@ const SIMPLE_MODEL_ARCH_OPTIONS = [
       "config.process[0].train.noise_scheduler": "flowmatch",
       "config.process[0].sample.num_frames": 41,
       "config.process[0].sample.fps": 16
-    }
+    },
+    "disableSections": [
+      "network.conv"
+    ],
+    "additionalSections": [
+      "datasets.num_frames",
+      "model.low_vram"
+    ]
   },
   {
     "value": "wan21_i2v:14b480p",
@@ -2223,7 +2757,15 @@ const SIMPLE_MODEL_ARCH_OPTIONS = [
       "config.process[0].sample.num_frames": 41,
       "config.process[0].sample.fps": 16,
       "config.process[0].train.timestep_type": "weighted"
-    }
+    },
+    "disableSections": [
+      "network.conv"
+    ],
+    "additionalSections": [
+      "sample.ctrl_img",
+      "datasets.num_frames",
+      "model.low_vram"
+    ]
   },
   {
     "value": "wan21_i2v:14b",
@@ -2239,7 +2781,15 @@ const SIMPLE_MODEL_ARCH_OPTIONS = [
       "config.process[0].sample.num_frames": 41,
       "config.process[0].sample.fps": 16,
       "config.process[0].train.timestep_type": "weighted"
-    }
+    },
+    "disableSections": [
+      "network.conv"
+    ],
+    "additionalSections": [
+      "sample.ctrl_img",
+      "datasets.num_frames",
+      "model.low_vram"
+    ]
   },
   {
     "value": "wan21:14b",
@@ -2254,7 +2804,14 @@ const SIMPLE_MODEL_ARCH_OPTIONS = [
       "config.process[0].train.noise_scheduler": "flowmatch",
       "config.process[0].sample.num_frames": 41,
       "config.process[0].sample.fps": 16
-    }
+    },
+    "disableSections": [
+      "network.conv"
+    ],
+    "additionalSections": [
+      "datasets.num_frames",
+      "model.low_vram"
+    ]
   },
   {
     "value": "wan22_14b:t2v",
@@ -2275,7 +2832,16 @@ const SIMPLE_MODEL_ARCH_OPTIONS = [
         "train_high_noise": true,
         "train_low_noise": true
       }
-    }
+    },
+    "disableSections": [
+      "network.conv"
+    ],
+    "additionalSections": [
+      "datasets.num_frames",
+      "model.low_vram",
+      "model.multistage",
+      "model.layer_offloading"
+    ]
   },
   {
     "value": "wan22_14b_i2v",
@@ -2296,7 +2862,17 @@ const SIMPLE_MODEL_ARCH_OPTIONS = [
         "train_high_noise": true,
         "train_low_noise": true
       }
-    }
+    },
+    "disableSections": [
+      "network.conv"
+    ],
+    "additionalSections": [
+      "sample.ctrl_img",
+      "datasets.num_frames",
+      "model.low_vram",
+      "model.multistage",
+      "model.layer_offloading"
+    ]
   },
   {
     "value": "wan22_5b",
@@ -2316,7 +2892,16 @@ const SIMPLE_MODEL_ARCH_OPTIONS = [
       "config.process[0].sample.height": 768,
       "config.process[0].train.timestep_type": "weighted",
       "config.process[0].datasets[x].do_i2v": true
-    }
+    },
+    "disableSections": [
+      "network.conv"
+    ],
+    "additionalSections": [
+      "sample.ctrl_img",
+      "datasets.num_frames",
+      "model.low_vram",
+      "datasets.do_i2v"
+    ]
   },
   {
     "value": "lumina2",
@@ -2329,7 +2914,11 @@ const SIMPLE_MODEL_ARCH_OPTIONS = [
       "config.process[0].model.quantize_te": true,
       "config.process[0].sample.sampler": "flowmatch",
       "config.process[0].train.noise_scheduler": "flowmatch"
-    }
+    },
+    "disableSections": [
+      "network.conv"
+    ],
+    "additionalSections": []
   },
   {
     "value": "qwen_image",
@@ -2345,7 +2934,14 @@ const SIMPLE_MODEL_ARCH_OPTIONS = [
       "config.process[0].train.noise_scheduler": "flowmatch",
       "config.process[0].train.timestep_type": "weighted",
       "config.process[0].model.qtype": "qfloat8"
-    }
+    },
+    "disableSections": [
+      "network.conv"
+    ],
+    "additionalSections": [
+      "model.low_vram",
+      "model.layer_offloading"
+    ]
   },
   {
     "value": "qwen_image:2512",
@@ -2361,7 +2957,14 @@ const SIMPLE_MODEL_ARCH_OPTIONS = [
       "config.process[0].train.noise_scheduler": "flowmatch",
       "config.process[0].train.timestep_type": "weighted",
       "config.process[0].model.qtype": "qfloat8"
-    }
+    },
+    "disableSections": [
+      "network.conv"
+    ],
+    "additionalSections": [
+      "model.low_vram",
+      "model.layer_offloading"
+    ]
   },
   {
     "value": "qwen_image_edit",
@@ -2377,7 +2980,16 @@ const SIMPLE_MODEL_ARCH_OPTIONS = [
       "config.process[0].train.noise_scheduler": "flowmatch",
       "config.process[0].train.timestep_type": "weighted",
       "config.process[0].model.qtype": "qfloat8"
-    }
+    },
+    "disableSections": [
+      "network.conv"
+    ],
+    "additionalSections": [
+      "datasets.control_path",
+      "sample.ctrl_img",
+      "model.low_vram",
+      "model.layer_offloading"
+    ]
   },
   {
     "value": "qwen_image_edit_plus",
@@ -2397,7 +3009,18 @@ const SIMPLE_MODEL_ARCH_OPTIONS = [
       "config.process[0].model.model_kwargs": {
         "match_target_res": false
       }
-    }
+    },
+    "disableSections": [
+      "network.conv",
+      "train.unload_text_encoder"
+    ],
+    "additionalSections": [
+      "datasets.multi_control_paths",
+      "sample.multi_ctrl_imgs",
+      "model.low_vram",
+      "model.layer_offloading",
+      "model.qie.match_target_res"
+    ]
   },
   {
     "value": "qwen_image_edit_plus:2511",
@@ -2417,7 +3040,18 @@ const SIMPLE_MODEL_ARCH_OPTIONS = [
       "config.process[0].model.model_kwargs": {
         "match_target_res": false
       }
-    }
+    },
+    "disableSections": [
+      "network.conv",
+      "train.unload_text_encoder"
+    ],
+    "additionalSections": [
+      "datasets.multi_control_paths",
+      "sample.multi_ctrl_imgs",
+      "model.low_vram",
+      "model.layer_offloading",
+      "model.qie.match_target_res"
+    ]
   },
   {
     "value": "hidream",
@@ -2436,7 +3070,13 @@ const SIMPLE_MODEL_ARCH_OPTIONS = [
         "ff_i.experts",
         "ff_i.gate"
       ]
-    }
+    },
+    "disableSections": [
+      "network.conv"
+    ],
+    "additionalSections": [
+      "model.low_vram"
+    ]
   },
   {
     "value": "hidream_e1",
@@ -2455,7 +3095,15 @@ const SIMPLE_MODEL_ARCH_OPTIONS = [
         "ff_i.experts",
         "ff_i.gate"
       ]
-    }
+    },
+    "disableSections": [
+      "network.conv"
+    ],
+    "additionalSections": [
+      "datasets.control_path",
+      "sample.ctrl_img",
+      "model.low_vram"
+    ]
   },
   {
     "value": "sdxl",
@@ -2469,7 +3117,12 @@ const SIMPLE_MODEL_ARCH_OPTIONS = [
       "config.process[0].sample.sampler": "ddpm",
       "config.process[0].train.noise_scheduler": "ddpm",
       "config.process[0].sample.guidance_scale": 6
-    }
+    },
+    "disableSections": [
+      "model.quantize",
+      "train.timestep_type"
+    ],
+    "additionalSections": []
   },
   {
     "value": "sd15",
@@ -2483,7 +3136,12 @@ const SIMPLE_MODEL_ARCH_OPTIONS = [
       "config.process[0].sample.width": 512,
       "config.process[0].sample.height": 512,
       "config.process[0].sample.guidance_scale": 6
-    }
+    },
+    "disableSections": [
+      "model.quantize",
+      "train.timestep_type"
+    ],
+    "additionalSections": []
   },
   {
     "value": "omnigen2",
@@ -2496,7 +3154,14 @@ const SIMPLE_MODEL_ARCH_OPTIONS = [
       "config.process[0].train.noise_scheduler": "flowmatch",
       "config.process[0].model.quantize": false,
       "config.process[0].model.quantize_te": true
-    }
+    },
+    "disableSections": [
+      "network.conv"
+    ],
+    "additionalSections": [
+      "datasets.control_path",
+      "sample.ctrl_img"
+    ]
   },
   {
     "value": "flux2",
@@ -2516,7 +3181,17 @@ const SIMPLE_MODEL_ARCH_OPTIONS = [
       "config.process[0].model.model_kwargs": {
         "match_target_res": false
       }
-    }
+    },
+    "disableSections": [
+      "network.conv"
+    ],
+    "additionalSections": [
+      "datasets.multi_control_paths",
+      "sample.multi_ctrl_imgs",
+      "model.low_vram",
+      "model.layer_offloading",
+      "model.qie.match_target_res"
+    ]
   },
   {
     "value": "zimage:turbo",
@@ -2536,7 +3211,15 @@ const SIMPLE_MODEL_ARCH_OPTIONS = [
       "config.process[0].model.assistant_lora_path": "ostris/zimage_turbo_training_adapter/zimage_turbo_training_adapter_v2.safetensors",
       "config.process[0].sample.guidance_scale": 1,
       "config.process[0].sample.sample_steps": 8
-    }
+    },
+    "disableSections": [
+      "network.conv"
+    ],
+    "additionalSections": [
+      "model.low_vram",
+      "model.layer_offloading",
+      "model.assistant_lora_path"
+    ]
   },
   {
     "value": "zimage",
@@ -2554,7 +3237,14 @@ const SIMPLE_MODEL_ARCH_OPTIONS = [
       "config.process[0].train.timestep_type": "weighted",
       "config.process[0].model.qtype": "qfloat8",
       "config.process[0].sample.sample_steps": 30
-    }
+    },
+    "disableSections": [
+      "network.conv"
+    ],
+    "additionalSections": [
+      "model.low_vram",
+      "model.layer_offloading"
+    ]
   },
   {
     "value": "zimage:deturbo",
@@ -2574,7 +3264,14 @@ const SIMPLE_MODEL_ARCH_OPTIONS = [
       "config.process[0].model.qtype": "qfloat8",
       "config.process[0].sample.guidance_scale": 3,
       "config.process[0].sample.sample_steps": 25
-    }
+    },
+    "disableSections": [
+      "network.conv"
+    ],
+    "additionalSections": [
+      "model.low_vram",
+      "model.layer_offloading"
+    ]
   },
   {
     "value": "ltx2",
@@ -2598,7 +3295,22 @@ const SIMPLE_MODEL_ARCH_OPTIONS = [
       "config.process[0].datasets[x].do_audio": true,
       "config.process[0].datasets[x].fps": 24,
       "config.process[0].datasets[x].auto_frame_count": false
-    }
+    },
+    "disableSections": [
+      "network.conv"
+    ],
+    "additionalSections": [
+      "sample.ctrl_img",
+      "datasets.num_frames",
+      "model.layer_offloading",
+      "model.low_vram",
+      "datasets.do_audio",
+      "datasets.audio_normalize",
+      "datasets.audio_preserve_pitch",
+      "datasets.do_i2v",
+      "train.audio_loss_multiplier",
+      "datasets.auto_frame_count"
+    ]
   },
   {
     "value": "ltx2.3",
@@ -2623,7 +3335,22 @@ const SIMPLE_MODEL_ARCH_OPTIONS = [
       "config.process[0].datasets[x].do_audio": true,
       "config.process[0].datasets[x].fps": 24,
       "config.process[0].datasets[x].auto_frame_count": false
-    }
+    },
+    "disableSections": [
+      "network.conv"
+    ],
+    "additionalSections": [
+      "sample.ctrl_img",
+      "datasets.num_frames",
+      "model.layer_offloading",
+      "model.low_vram",
+      "datasets.do_audio",
+      "datasets.audio_normalize",
+      "datasets.audio_preserve_pitch",
+      "datasets.do_i2v",
+      "train.audio_loss_multiplier",
+      "datasets.auto_frame_count"
+    ]
   },
   {
     "value": "flux2_klein_4b",
@@ -2643,7 +3370,17 @@ const SIMPLE_MODEL_ARCH_OPTIONS = [
       "config.process[0].model.model_kwargs": {
         "match_target_res": false
       }
-    }
+    },
+    "disableSections": [
+      "network.conv"
+    ],
+    "additionalSections": [
+      "datasets.multi_control_paths",
+      "sample.multi_ctrl_imgs",
+      "model.low_vram",
+      "model.layer_offloading",
+      "model.qie.match_target_res"
+    ]
   },
   {
     "value": "flux2_klein_9b",
@@ -2663,7 +3400,17 @@ const SIMPLE_MODEL_ARCH_OPTIONS = [
       "config.process[0].model.model_kwargs": {
         "match_target_res": false
       }
-    }
+    },
+    "disableSections": [
+      "network.conv"
+    ],
+    "additionalSections": [
+      "datasets.multi_control_paths",
+      "sample.multi_ctrl_imgs",
+      "model.low_vram",
+      "model.layer_offloading",
+      "model.qie.match_target_res"
+    ]
   }
 ];
 
@@ -2688,6 +3435,39 @@ const SAVE_DTYPE_OPTIONS = [
   { value: 'fp16', label: 'fp16' },
   { value: 'fp32', label: 'fp32' },
 ];
+
+const OPTIMIZER_OPTIONS = [
+  { value: 'adamw8bit', label: 'AdamW8Bit' },
+  { value: 'adamw', label: 'AdamW' },
+  { value: 'prodigy', label: 'Prodigy' },
+];
+
+const TIMESTEP_TYPE_OPTIONS = [
+  { value: 'sigmoid', label: 'Sigmoid' },
+  { value: 'linear', label: 'Linear' },
+  { value: 'shift', label: 'Shift' },
+  { value: 'weighted', label: 'Weighted' },
+];
+
+const TIMESTEP_BIAS_OPTIONS = [
+  { value: 'balanced', label: 'Balanced' },
+  { value: 'content', label: 'High Noise' },
+  { value: 'style', label: 'Low Noise' },
+];
+
+const LOSS_TYPE_OPTIONS = [
+  { value: 'mse', label: 'Mean Squared Error' },
+  { value: 'mae', label: 'Mean Absolute Error' },
+  { value: 'wavelet', label: 'Wavelet' },
+  { value: 'stepped', label: 'Stepped Recovery' },
+];
+
+const TARGET_TYPE_OPTIONS = [
+  { value: 'lora', label: 'LoRA' },
+  { value: 'lokr', label: 'LoKr' },
+];
+
+const DATASET_RESOLUTION_OPTIONS = [256, 512, 768, 1024, 1280, 1536];
 
 function createJobTemplateObject() {
   return {
@@ -2984,6 +3764,28 @@ function applySimpleModelArch(arch) {
     process.model.quantize_te = false;
   }
 
+  if (!hasAdditionalSection(option, 'model.low_vram')) {
+    process.model.low_vram = false;
+  }
+
+  if (!hasAdditionalSection(option, 'model.layer_offloading')) {
+    delete process.model.layer_offloading;
+    delete process.model.layer_offloading_transformer_percent;
+    delete process.model.layer_offloading_text_encoder_percent;
+  } else {
+    process.model.layer_offloading = Boolean(process.model.layer_offloading);
+    process.model.layer_offloading_transformer_percent = process.model.layer_offloading_transformer_percent ?? 0.7;
+    process.model.layer_offloading_text_encoder_percent = process.model.layer_offloading_text_encoder_percent ?? 0.3;
+  }
+
+  if (!hasAdditionalSection(option, 'model.assistant_lora_path')) {
+    delete process.model.assistant_lora_path;
+  }
+
+  if (isSectionDisabled(option, 'train.unload_text_encoder')) {
+    process.train.unload_text_encoder = false;
+  }
+
   state.editor.jobConfig = stringifyJson(normalizeJobConfig(jobConfig));
 }
 
@@ -3009,12 +3811,20 @@ function buildSimpleJobConfigFromForm(formData, baseConfigSource) {
   const jobConfig = normalizeJobConfig(parsedBase);
   const process = jobConfig.config.process[0];
   const gpuIds = String(formData.get('gpuIds') || state.editor?.gpuIds || defaultGpuIds(state.editor?.gpuInfo)).trim();
+  const modelOption = getSimpleModelOption(String(formData.get('modelArch') || process.model.arch || 'flex1'));
+  const isMac = Boolean(state.editor?.gpuInfo?.isMac || state.overview.gpu?.isMac);
 
   jobConfig.config.name = String(formData.get('name') || jobConfig.config.name || '').trim() || jobConfig.config.name;
   process.type = String(formData.get('jobType') || process.type || 'diffusion_trainer');
   process.trigger_word = blankToNull(formData.get('triggerWord'));
   process.model.arch = String(formData.get('modelArch') || process.model.arch || 'flex1');
   process.model.name_or_path = String(formData.get('modelNameOrPath') || process.model.name_or_path || '').trim();
+
+  if (hasAdditionalSection(modelOption, 'model.assistant_lora_path')) {
+    process.model.assistant_lora_path = blankToNull(formData.get('assistantLoraPath'));
+  } else {
+    delete process.model.assistant_lora_path;
+  }
 
   const transformerQuant = String(formData.get('transformerQuant') || (process.model.quantize ? process.model.qtype : ''));
   process.model.quantize = transformerQuant !== '';
@@ -3023,12 +3833,53 @@ function buildSimpleJobConfigFromForm(formData, baseConfigSource) {
   const textEncoderQuant = String(formData.get('textEncoderQuant') || (process.model.quantize_te ? process.model.qtype_te : ''));
   process.model.quantize_te = textEncoderQuant !== '';
   process.model.qtype_te = textEncoderQuant || 'qfloat8';
-  process.model.low_vram = formData.get('lowVram') === 'on';
+
+  process.model.low_vram = hasAdditionalSection(modelOption, 'model.low_vram')
+    ? formData.get('lowVram') === 'on'
+    : false;
+
+  if (hasAdditionalSection(modelOption, 'model.layer_offloading') && !isMac) {
+    process.model.layer_offloading = formData.get('layerOffloading') === 'on';
+    process.model.layer_offloading_transformer_percent = Math.min(100, Math.max(0, parseFloatValue(formData.get('layerOffloadingTransformerPercent'), process.model.layer_offloading_transformer_percent ?? 70, 0))) / 100;
+    process.model.layer_offloading_text_encoder_percent = Math.min(100, Math.max(0, parseFloatValue(formData.get('layerOffloadingTextEncoderPercent'), process.model.layer_offloading_text_encoder_percent ?? 30, 0))) / 100;
+  } else {
+    delete process.model.layer_offloading;
+    delete process.model.layer_offloading_transformer_percent;
+    delete process.model.layer_offloading_text_encoder_percent;
+  }
+
+  process.network.type = String(formData.get('networkType') || process.network?.type || 'lora');
+  if (process.network.type === 'lokr') {
+    process.network.lokr_factor = parseInteger(formData.get('lokrFactor'), process.network?.lokr_factor ?? -1);
+  } else {
+    process.network.linear = parseInteger(formData.get('linearRank'), process.network?.linear ?? 32, 0);
+    process.network.linear_alpha = parseInteger(formData.get('linearAlpha'), process.network?.linear_alpha ?? process.network.linear, 0);
+    if (!isSectionDisabled(modelOption, 'network.conv')) {
+      process.network.conv = parseInteger(formData.get('convRank'), process.network?.conv ?? 16, 0);
+      process.network.conv_alpha = parseInteger(formData.get('convAlpha'), process.network?.conv_alpha ?? process.network.conv, 0);
+    }
+  }
 
   process.train.steps = parseInteger(formData.get('steps'), process.train.steps, 1);
   process.train.batch_size = parseInteger(formData.get('batchSize'), process.train.batch_size, 1);
   process.train.gradient_accumulation = parseInteger(formData.get('gradAccum'), process.train.gradient_accumulation, 1);
+  process.train.optimizer = String(formData.get('optimizer') || process.train.optimizer || 'adamw8bit');
   process.train.lr = parseFloatValue(formData.get('learningRate'), process.train.lr, 0.0001);
+  process.train.optimizer_params.weight_decay = parseFloatValue(formData.get('weightDecay'), process.train.optimizer_params?.weight_decay ?? 0.0001, 0);
+  if (!isSectionDisabled(modelOption, 'train.timestep_type')) {
+    process.train.timestep_type = String(formData.get('timestepType') || process.train.timestep_type || 'sigmoid');
+  }
+  process.train.content_or_style = String(formData.get('timestepBias') || process.train.content_or_style || 'balanced');
+  process.train.loss_type = String(formData.get('lossType') || process.train.loss_type || 'mse');
+  process.train.ema_config.use_ema = formData.get('useEma') === 'on';
+  process.train.ema_config.ema_decay = parseFloatValue(formData.get('emaDecay'), process.train.ema_config?.ema_decay ?? 0.99, 0);
+
+  const cacheTextEmbeddings = formData.get('cacheTextEmbeddings') === 'on';
+  const unloadTextEncoder = !isSectionDisabled(modelOption, 'train.unload_text_encoder')
+    && !cacheTextEmbeddings
+    && formData.get('unloadTextEncoder') === 'on';
+  process.train.cache_text_embeddings = cacheTextEmbeddings;
+  process.train.unload_text_encoder = unloadTextEncoder;
 
   process.save.dtype = String(formData.get('saveDtype') || process.save.dtype || 'bf16');
   process.save.save_every = parseInteger(formData.get('saveEvery'), process.save.save_every, 1);
@@ -3040,7 +3891,12 @@ function buildSimpleJobConfigFromForm(formData, baseConfigSource) {
   dataset.num_repeats = parseInteger(formData.get('datasetRepeats'), dataset.num_repeats, 1);
   dataset.caption_dropout_rate = parseFloatValue(formData.get('captionDropout'), dataset.caption_dropout_rate, 0);
   dataset.default_caption = String(formData.get('defaultCaption') || dataset.default_caption || '');
-  dataset.resolution = parseResolutionList(formData.get('datasetResolution'), dataset.resolution);
+  dataset.network_weight = parseFloatValue(formData.get('datasetNetworkWeight'), dataset.network_weight ?? 1, 0);
+  dataset.cache_latents_to_disk = formData.get('cacheLatents') === 'on';
+  dataset.is_reg = formData.get('isReg') === 'on';
+  dataset.flip_x = formData.get('flipX') === 'on';
+  dataset.flip_y = formData.get('flipY') === 'on';
+  dataset.resolution = parseResolutionList(formData.getAll('datasetResolution'), dataset.resolution);
   process.datasets[0] = dataset;
 
   process.sample.sample_every = parseInteger(formData.get('sampleEvery'), process.sample.sample_every, 1);
@@ -3052,6 +3908,13 @@ function buildSimpleJobConfigFromForm(formData, baseConfigSource) {
   process.sample.seed = parseInteger(formData.get('sampleSeed'), process.sample.seed, 0);
   process.sample.walk_seed = formData.get('walkSeed') === 'on';
   process.sample.samples = parsePromptSamples(formData.get('samplePrompts'));
+
+  const disableSampling = formData.get('disableSampling') === 'on';
+  const forceFirstSample = !disableSampling && formData.get('forceFirstSample') === 'on';
+  const skipFirstSample = !disableSampling && !forceFirstSample && formData.get('skipFirstSample') === 'on';
+  process.train.disable_sampling = disableSampling;
+  process.train.force_first_sample = forceFirstSample;
+  process.train.skip_first_sample = skipFirstSample;
 
   if (process.type === 'concept_slider') {
     process.slider = {
@@ -3068,7 +3931,6 @@ function buildSimpleJobConfigFromForm(formData, baseConfigSource) {
     delete process.slider;
   }
 
-  const modelOption = getSimpleModelOption(process.model.arch);
   if (modelOption) {
     const defaultModelName = modelOption.defaults?.['config.process[0].model.name_or_path'];
     if (!process.model.name_or_path && defaultModelName) {
@@ -3090,9 +3952,12 @@ function blankToNull(value) {
 }
 
 function parseResolutionList(value, fallback) {
-  const numbers = String(value || '')
-    .split(',')
-    .map((item) => parseInt(item.trim(), 10))
+  const source = Array.isArray(value)
+    ? value
+    : String(value || '').split(',');
+
+  const numbers = source
+    .map((item) => parseInt(String(item).trim(), 10))
     .filter((item) => Number.isFinite(item) && item > 0);
 
   return numbers.length ? numbers : cloneValue(fallback || DEFAULT_DATASET_CONFIG.resolution);
@@ -3235,12 +4100,3 @@ function escapeHtml(value) {
     .replaceAll('"', '&quot;')
     .replaceAll("'", '&#39;');
 }
-
-
-
-
-
-
-
-
-
