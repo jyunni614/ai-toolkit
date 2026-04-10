@@ -408,6 +408,8 @@ class BaseModel:
         if self.network is not None and self.model_config.arch == "zimage":
             print_acc("Moving LoRA network to GPU for sampling")
             self.network.force_to(self.device_torch, dtype=torch.float32)
+            if hasattr(self.network, "_update_torch_multiplier"):
+                self.network._update_torch_multiplier()
             flush()
 
         # save current seed state for training
@@ -481,6 +483,9 @@ class BaseModel:
 
                     if network is not None:
                         network.multiplier = gen_config.network_multiplier
+                        if hasattr(network, "_update_torch_multiplier"):
+                            network._update_torch_multiplier()
+
                     torch.manual_seed(gen_config.seed)
                     torch.cuda.manual_seed(gen_config.seed)
 
