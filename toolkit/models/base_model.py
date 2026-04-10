@@ -509,9 +509,28 @@ class BaseModel:
                             quad_count=4
                         )
 
+                    #region 디스크 캐시 지원
+                    # if self.sample_prompts_cache is not None:
+                    #     conditional_embeds = self.sample_prompts_cache[i]['conditional'].to(self.device_torch, dtype=self.torch_dtype)
+                    #     unconditional_embeds = self.sample_prompts_cache[i]['unconditional'].to(self.device_torch, dtype=self.torch_dtype)
                     if self.sample_prompts_cache is not None:
-                        conditional_embeds = self.sample_prompts_cache[i]['conditional'].to(self.device_torch, dtype=self.torch_dtype)
-                        unconditional_embeds = self.sample_prompts_cache[i]['unconditional'].to(self.device_torch, dtype=self.torch_dtype)
+                        cache_item = self.sample_prompts_cache[i]
+
+                        if "conditional_path" in cache_item:
+                            conditional_embeds = PromptEmbeds.load(cache_item["conditional_path"]).to(
+                                self.device_torch, dtype=self.torch_dtype
+                            )
+                            unconditional_embeds = PromptEmbeds.load(cache_item["unconditional_path"]).to(
+                                self.device_torch, dtype=self.torch_dtype
+                            )
+                        else:
+                            conditional_embeds = cache_item["conditional"].to(
+                                self.device_torch, dtype=self.torch_dtype
+                            )
+                            unconditional_embeds = cache_item["unconditional"].to(
+                                self.device_torch, dtype=self.torch_dtype
+                            )
+                    #endregion
                     else:
                         ctrl_img = None
                         has_control_images = False
@@ -662,6 +681,8 @@ class BaseModel:
                     gen_config.save_image(img, i)
                     gen_config.log_image(img, i)
                     self._after_sample_image(i, len(image_configs))
+                    
+                    del conditional_embeds, unconditional_embeds
                     flush()
 
                 if self.adapter is not None and isinstance(self.adapter, ReferenceAdapter):

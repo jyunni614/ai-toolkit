@@ -116,95 +116,92 @@ class SDTrainer(BaseSDTrainProcess):
     def cache_sample_prompts(self):
         if self.train_config.disable_sampling:
             return
-        if self.sample_config is not None and self.sample_config.samples is not None and len(self.sample_config.samples) > 0:
-            # cache all the samples
-            self.sd.sample_prompts_cache = []
-            sample_folder = os.path.join(self.save_root, 'samples')
-            output_path = os.path.join(sample_folder, 'test.jpg')
-            for i in range(len(self.sample_config.prompts)):
-                sample_item = self.sample_config.samples[i]
-                prompt = self.sample_config.prompts[i]
+        if self.sample_config is None or self.sample_config.samples is None or len(self.sample_config.samples) == 0:
+            return
 
-                # needed so we can autoparse the prompt to handle flags
-                gen_img_config = GenerateImageConfig(
-                    prompt=prompt, # it will autoparse the prompt
-                    negative_prompt=sample_item.neg,
-                    output_path=output_path,
-                    ctrl_img=sample_item.ctrl_img,
-                    ctrl_img_1=sample_item.ctrl_img_1,
-                    ctrl_img_2=sample_item.ctrl_img_2,
-                    ctrl_img_3=sample_item.ctrl_img_3,
-                )
-                
-                has_control_images = False
-                if gen_img_config.ctrl_img is not None or gen_img_config.ctrl_img_1 is not None or gen_img_config.ctrl_img_2 is not None or gen_img_config.ctrl_img_3 is not None:
-                    has_control_images = True
-                # see if we need to encode the control images
-                if self.sd.encode_control_in_text_embeddings and has_control_images:
-                    
-                    ctrl_img_list = []
-                    
-                    if gen_img_config.ctrl_img is not None:
-                        ctrl_img = Image.open(gen_img_config.ctrl_img).convert("RGB")
-                        # convert to 0 to 1 tensor
-                        ctrl_img = (
-                            TF.to_tensor(ctrl_img)
-                            .unsqueeze(0)
-                            .to(self.sd.device_torch, dtype=self.sd.torch_dtype)
-                        )
-                        ctrl_img_list.append(ctrl_img)
-                    
-                    if gen_img_config.ctrl_img_1 is not None:
-                        ctrl_img_1 = Image.open(gen_img_config.ctrl_img_1).convert("RGB")
-                        # convert to 0 to 1 tensor
-                        ctrl_img_1 = (
-                            TF.to_tensor(ctrl_img_1)
-                            .unsqueeze(0)
-                            .to(self.sd.device_torch, dtype=self.sd.torch_dtype)
-                        )
-                        ctrl_img_list.append(ctrl_img_1)
-                    if gen_img_config.ctrl_img_2 is not None:
-                        ctrl_img_2 = Image.open(gen_img_config.ctrl_img_2).convert("RGB")
-                        # convert to 0 to 1 tensor
-                        ctrl_img_2 = (
-                            TF.to_tensor(ctrl_img_2)
-                            .unsqueeze(0)
-                            .to(self.sd.device_torch, dtype=self.sd.torch_dtype)
-                        )
-                        ctrl_img_list.append(ctrl_img_2)
-                    if gen_img_config.ctrl_img_3 is not None:
-                        ctrl_img_3 = Image.open(gen_img_config.ctrl_img_3).convert("RGB")
-                        # convert to 0 to 1 tensor
-                        ctrl_img_3 = (
-                            TF.to_tensor(ctrl_img_3)
-                            .unsqueeze(0)
-                            .to(self.sd.device_torch, dtype=self.sd.torch_dtype)
-                        )
-                        ctrl_img_list.append(ctrl_img_3)
-                    
-                    if self.sd.has_multiple_control_images:
-                        ctrl_img = ctrl_img_list
-                    else:
-                        ctrl_img = ctrl_img_list[0] if len(ctrl_img_list) > 0 else None
-                    
-                    
-                    positive = self.sd.encode_prompt(
-                        gen_img_config.prompt,
-                        control_images=ctrl_img
-                    ).to('cpu')
-                    negative = self.sd.encode_prompt(
-                        gen_img_config.negative_prompt,
-                        control_images=ctrl_img
-                    ).to('cpu')
-                else:
-                    positive = self.sd.encode_prompt(gen_img_config.prompt).to('cpu')
-                    negative = self.sd.encode_prompt(gen_img_config.negative_prompt).to('cpu')
-                
-                self.sd.sample_prompts_cache.append({
-                    'conditional': positive,
-                    'unconditional': negative
-                })
-        
+        self.sd.sample_prompts_cache = []
+
+        sample_cache_dir = os.path.join(self.save_root, "sample_prompt_cache")
+        os.makedirs(sample_cache_dir, exist_ok=True)
+
+        # negative가 전부 같으면 하나만 저장해서 재사용
+        shared_neg = None
+        if getattr(self.sample_config, "neg", "") == "":
+            shared_neg = os.path.join(sample_cache_dir, "shared_negative.safetensors")
+
+        sample_folder = os.path.join(self.save_root, 'samples')
+        output_path = os.path.join(sample_folder, 'test.jpg')
+
+        for i in range(len(self.sample_config.prompts)):
+            sample_item = self.sample_config.samples[i]
+            prompt = self.sample_config.prompts[i]
+
+            gen_img_config = GenerateImageConfig(
+                prompt=prompt,
+                negative_prompt=sample_item.neg,
+                output_path=output_path,
+                ctrl_img=sample_item.ctrl_img,
+                ctrl_img_1=sample_item.ctrl_img_1,
+                ctrl_img_2=sample_item.ctrl_img_2,
+                ctrl_img_3=sample_item.ctrl_img_3,
+            )
+
+            has_control_images = (
+                gen_img_config.ctrl_img is not None
+                or gen_img_config.ctrl_img_1 is not None
+                or gen_img_config.ctrl_img_2 is not None
+                or gen_img_config.ctrl_img_3 is not None
+            )
+
+            if self.sd.encode_control_in_text_embeddings and has_control_images:
+                ctrl_img_list = []
+
+                if gen_img_config.ctrl_img is not None:
+                    ctrl_img = Image.open(gen_img_config.ctrl_img).convert("RGB")
+                    ctrl_img = TF.to_tensor(ctrl_img).unsqueeze(0).to(self.sd.device_torch, dtype=self.sd.torch_dtype)
+                    ctrl_img_list.append(ctrl_img)
+
+                if gen_img_config.ctrl_img_1 is not None:
+                    ctrl_img_1 = Image.open(gen_img_config.ctrl_img_1).convert("RGB")
+                    ctrl_img_1 = TF.to_tensor(ctrl_img_1).unsqueeze(0).to(self.sd.device_torch, dtype=self.sd.torch_dtype)
+                    ctrl_img_list.append(ctrl_img_1)
+
+                if gen_img_config.ctrl_img_2 is not None:
+                    ctrl_img_2 = Image.open(gen_img_config.ctrl_img_2).convert("RGB")
+                    ctrl_img_2 = TF.to_tensor(ctrl_img_2).unsqueeze(0).to(self.sd.device_torch, dtype=self.sd.torch_dtype)
+                    ctrl_img_list.append(ctrl_img_2)
+
+                if gen_img_config.ctrl_img_3 is not None:
+                    ctrl_img_3 = Image.open(gen_img_config.ctrl_img_3).convert("RGB")
+                    ctrl_img_3 = TF.to_tensor(ctrl_img_3).unsqueeze(0).to(self.sd.device_torch, dtype=self.sd.torch_dtype)
+                    ctrl_img_list.append(ctrl_img_3)
+
+                ctrl_img = ctrl_img_list if self.sd.has_multiple_control_images else (ctrl_img_list[0] if len(ctrl_img_list) > 0 else None)
+
+                positive = self.sd.encode_prompt(gen_img_config.prompt, control_images=ctrl_img).to("cpu")
+                negative = self.sd.encode_prompt(gen_img_config.negative_prompt, control_images=ctrl_img).to("cpu")
+            else:
+                positive = self.sd.encode_prompt(gen_img_config.prompt).to("cpu")
+                negative = self.sd.encode_prompt(gen_img_config.negative_prompt).to("cpu")
+
+            pos_path = os.path.join(sample_cache_dir, f"sample_{i:03d}_pos.safetensors")
+            positive.save(pos_path)
+
+            if shared_neg is not None:
+                if not os.path.exists(shared_neg):
+                    negative.save(shared_neg)
+                neg_path = shared_neg
+            else:
+                neg_path = os.path.join(sample_cache_dir, f"sample_{i:03d}_neg.safetensors")
+                negative.save(neg_path)
+
+            self.sd.sample_prompts_cache.append({
+                "conditional_path": pos_path,
+                "unconditional_path": neg_path,
+            })
+
+            del positive, negative
+            flush()
 
     def before_dataset_load(self):
         self.assistant_adapter = None
