@@ -185,3 +185,8 @@ aitk_db.db
 /notes.md
 /data
 .claude
+
+# ASP.NET
+/.dotnet
+/web/bin
+/web/obj

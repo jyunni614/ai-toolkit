@@ -253,7 +253,7 @@ class ZImageModel(BaseModel):
 
     def ensure_text_encoder_loaded(self):
         print("DEBUG: ensure_text_encoder_loaded() called", flush=True)
-        traceback.print_stack(limit=12)
+        # traceback.print_stack(limit=12) # 불필요
         
         if self._has_real_text_encoder():
             return
