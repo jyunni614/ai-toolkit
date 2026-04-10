@@ -16,6 +16,11 @@ const state = {
 
 let pollHandle = null;
 let routeNonce = 0;
+let loginAutoUnlockWatchHandle = null;
+let loginAutoUnlockDebounceHandle = null;
+let loginAutoUnlockObservedValue = '';
+let loginAutoUnlockStatus = { message: 'Type the password to unlock automatically.', tone: 'subtle' };
+let loginAttemptNonce = 0;
 
 boot().catch((error) => {
   console.error(error);
@@ -109,27 +114,67 @@ function bindEvents() {
       }
       applySimpleJobType(target.value);
       render();
+      return;
     }
+
+    if (target.matches('[data-change="simple-editor-refresh"]') && (target instanceof HTMLInputElement || target instanceof HTMLSelectElement)) {
+      if (!syncSimpleEditorFromDom()) {
+        return;
+      }
+      render();
+    }
+  });
+
+  app.addEventListener('input', (event) => {
+    const target = event.target;
+    if (!(target instanceof HTMLInputElement) || !(target.form instanceof HTMLFormElement)) {
+      return;
+    }
+
+    if (target.id === 'login-token') {
+      queueLoginAutoUnlock(target.value, { silentFailure: true });
+      return;
+    }
+
+    const syncGroup = target.dataset.syncGroup;
+    if (!syncGroup) {
+      return;
+    }
+
+    target.form.querySelectorAll('input[data-sync-group]').forEach((peer) => {
+      if (peer !== target && peer instanceof HTMLInputElement && peer.dataset.syncGroup === syncGroup) {
+        peer.value = target.value;
+      }
+    });
   });
 }
 
 async function verifyAuth() {
+  return verifyAuthWithToken(localStorage.getItem('AI_TOOLKIT_AUTH'));
+}
+
+async function verifyAuthWithToken(tokenOverride, options = {}) {
   if (!state.meta?.authRequired) {
     state.authorized = true;
     return;
   }
 
-  const token = localStorage.getItem('AI_TOOLKIT_AUTH');
+  const token = tokenOverride;
   if (!token) {
     state.authorized = false;
     return;
   }
 
   try {
-    const response = await fetchJson('/api/auth');
+    const response = await fetchJson('/api/auth', {
+      authToken: token,
+      preserveUnauthorizedState: Boolean(options.preserveUnauthorizedState),
+    });
     state.authorized = Boolean(response?.isAuthenticated);
   } catch {
-    localStorage.removeItem('AI_TOOLKIT_AUTH');
+    if (!options.preserveUnauthorizedState) {
+      localStorage.removeItem('AI_TOOLKIT_AUTH');
+    }
     state.authorized = false;
   }
 }
@@ -404,9 +449,11 @@ function render() {
 
   if (state.meta?.authRequired && !state.authorized) {
     app.innerHTML = renderLogin();
+    activateLoginAutoUnlock();
     return;
   }
 
+  clearLoginAutoUnlockWatch();
   const view = renderCurrentView();
   app.innerHTML = renderShell(view);
   restoreTransientViewState();
@@ -676,59 +723,46 @@ function renderJobEditorModeToggle(editor) {
   `;
 }
 
+function renderJobEditorSubmitBar(isAdvanced) {
+  return `
+    <div class="button-row editor-submit-row">
+      <button class="button" type="submit" name="submitAction" value="save">Save job</button>
+      <button class="secondary-button" type="submit" name="submitAction" value="queue">Save and run queue</button>
+      ${isAdvanced ? '<button class="ghost-button" type="button" data-action="format-job-json">Pretty print JSON</button>' : ''}
+      ${isAdvanced ? '' : '<button class="ghost-button" type="button" data-action="load-job-template">Starter template</button>'}
+    </div>
+  `;
+}
+
 function renderJobEditorInfoPanel(editor, settings) {
   const datasetCount = editor?.datasetNames?.length || 0;
   const gpuCount = editor?.gpuInfo?.isMac ? 1 : editor?.gpuInfo?.gpus?.length || 0;
   const defaultGpu = editor?.gpuIds || defaultGpuIds(editor?.gpuInfo);
+  const modeLabel = editor?.viewMode === 'advanced' ? 'Advanced JSON' : 'Simple';
 
   return `
-    <section class="job-info-grid">
-      <div class="panel">
-        <div class="surface-header">
+    <section class="editor-info-strip">
+      <div class="surface compact-info-panel">
+        <div class="compact-info-head">
           <h3>Runtime Paths</h3>
-          <span class="badge info">Backend-owned</span>
+          <span class="badge info">Backend</span>
         </div>
-        <div class="kv-grid">
-          <div class="kv-item">
-            <div class="kv-label">Training Folder</div>
-            <div class="kv-value mono">${escapeHtml(settings?.trainingFolder || '')}</div>
-          </div>
-          <div class="kv-item">
-            <div class="kv-label">Datasets Folder</div>
-            <div class="kv-value mono">${escapeHtml(settings?.datasetsFolder || '')}</div>
-          </div>
-          <div class="kv-item">
-            <div class="kv-label">Data Root</div>
-            <div class="kv-value mono">${escapeHtml(settings?.dataRoot || '')}</div>
-          </div>
-          <div class="kv-item">
-            <div class="kv-label">Backend Notes</div>
-            <div class="kv-value">Training folder, sqlite path, UI logging, and device flags are still injected server-side when the job runs.</div>
-          </div>
+        <div class="compact-path-list mono">
+          <div class="compact-path-row"><span class="compact-key">Training</span><span class="compact-value">${escapeHtml(settings?.trainingFolder || '')}</span></div>
+          <div class="compact-path-row"><span class="compact-key">Datasets</span><span class="compact-value">${escapeHtml(settings?.datasetsFolder || '')}</span></div>
+          <div class="compact-path-row"><span class="compact-key">Data Root</span><span class="compact-value">${escapeHtml(settings?.dataRoot || '')}</span></div>
         </div>
       </div>
-      <div class="panel">
-        <div class="surface-header">
+      <div class="surface compact-info-panel">
+        <div class="compact-info-head">
           <h3>Editor Context</h3>
-          <span class="badge success">Live metadata</span>
+          <span class="badge success">Live</span>
         </div>
-        <div class="kv-grid">
-          <div class="kv-item">
-            <div class="kv-label">Loaded Datasets</div>
-            <div class="kv-value">${datasetCount}</div>
-          </div>
-          <div class="kv-item">
-            <div class="kv-label">Detected GPUs</div>
-            <div class="kv-value">${gpuCount}</div>
-          </div>
-          <div class="kv-item">
-            <div class="kv-label">Default Queue Target</div>
-            <div class="kv-value mono">${escapeHtml(defaultGpu)}</div>
-          </div>
-          <div class="kv-item">
-            <div class="kv-label">Mode Hint</div>
-            <div class="kv-value">Simple mode preserves the common fields. Advanced mode keeps the entire JSON schema visible.</div>
-          </div>
+        <div class="compact-stats-grid">
+          <div class="compact-stat"><span class="compact-key">Datasets</span><span class="compact-stat-value">${datasetCount}</span></div>
+          <div class="compact-stat"><span class="compact-key">GPUs</span><span class="compact-stat-value">${gpuCount}</span></div>
+          <div class="compact-stat"><span class="compact-key">Queue</span><span class="compact-stat-value mono">${escapeHtml(defaultGpu)}</span></div>
+          <div class="compact-stat"><span class="compact-key">Mode</span><span class="compact-stat-value">${escapeHtml(modeLabel)}</span></div>
         </div>
       </div>
     </section>
@@ -739,7 +773,7 @@ function renderAdvancedJobEditor(editor) {
   const gpuChoices = renderGpuDataList(editor);
 
   return `
-    <section class="hero-panel job-json-panel">
+    <section class="panel job-json-panel legacy-json-panel">
       <div class="hero-line">
         <h3>Job Definition JSON</h3>
         <div class="badge-row">
@@ -749,6 +783,7 @@ function renderAdvancedJobEditor(editor) {
       </div>
       <form id="job-editor-form" class="stack">
         <input type="hidden" name="jobId" value="${escapeHtml(editor?.id || '')}">
+        ${renderJobEditorSubmitBar(true)}
         <div class="job-meta-grid">
           <div class="field">
             <label class="field-label" for="job-name">Job Name</label>
@@ -765,12 +800,6 @@ function renderAdvancedJobEditor(editor) {
           <label class="field-label" for="job-config">Job Config JSON</label>
           <textarea id="job-config" class="job-config-input" name="jobConfig" spellcheck="false">${escapeHtml(editor?.jobConfig || createJobTemplate())}</textarea>
           <div class="field-help">Pretty print if you need to reflow the document. The backend will still inject runtime-specific values at execution time.</div>
-        </div>
-        <div class="button-row">
-          <button class="button" type="submit" name="submitAction" value="save">Save job</button>
-          <button class="secondary-button" type="submit" name="submitAction" value="queue">Save and run queue</button>
-          <button class="ghost-button" type="button" data-action="format-job-json">Pretty print JSON</button>
-          <button class="ghost-button" type="button" data-action="load-job-template">Starter template</button>
         </div>
       </form>
     </section>
@@ -803,8 +832,9 @@ function renderSimpleJobEditor(editor, settings) {
   return `
     <form id="job-editor-form" class="stack">
       <input type="hidden" name="jobId" value="${escapeHtml(editor?.id || '')}">
-      <section class="simple-editor-grid">
-        <div class="panel">
+      ${renderJobEditorSubmitBar(false)}
+      <section class="simple-editor-grid legacy-simple-grid">
+        <div class="panel simple-card simple-job-card">
           <div class="surface-header">
             <h3>Job</h3>
             <span class="badge success">Common flow</span>
@@ -831,7 +861,7 @@ function renderSimpleJobEditor(editor, settings) {
           </div>
         </div>
 
-        <div class="panel">
+        <div class="panel simple-card simple-model-card">
           <div class="surface-header">
             <h3>Model</h3>
             <span class="badge info">${escapeHtml(modelOption?.label || process.model.arch || 'Custom')}</span>
@@ -865,39 +895,47 @@ function renderSimpleJobEditor(editor, settings) {
               </select>
             </div>
           </div>
-          <div class="simple-grid-2">
+          <div class="simple-grid-2 model-option-grid">
             ${supportsLowVram ? `
               <div class="field">
                 <label class="field-label">Options</label>
                 <label class="toggle-row compact-toggle">
-                  <input type="checkbox" name="lowVram" ${process.model.low_vram ? 'checked' : ''}>
+                  <input type="checkbox" name="lowVram" ${process.model.low_vram ? "checked" : ""}>
                   <span>Low VRAM</span>
                 </label>
-              </div>` : ''}
+              </div>` : ""}
             ${supportsLayerOffloading ? `
               <div class="field">
                 <label class="field-label">Offloading</label>
                 <label class="toggle-row compact-toggle">
-                  <input type="checkbox" name="layerOffloading" ${process.model.layer_offloading ? 'checked' : ''}>
+                  <input type="checkbox" name="layerOffloading" data-change="simple-editor-refresh" ${process.model.layer_offloading ? "checked" : ""}>
                   <span>Layer Offloading</span>
                 </label>
-              </div>` : ''}
+              </div>` : ""}
           </div>
-          ${supportsLayerOffloading ? `
-            <div class="simple-grid-2">
-              <div class="field">
+          ${supportsLayerOffloading && process.model.layer_offloading ? `
+            <div class="offload-stack">
+              <div class="field range-input-block">
                 <label class="field-label" for="layer-offloading-transformer">Transformer Offload %</label>
-                <input id="layer-offloading-transformer" name="layerOffloadingTransformerPercent" type="number" min="0" max="100" value="${escapeHtml(layerOffloadTransformer)}">
+                <div class="range-input-row">
+                  <input id="layer-offloading-transformer-range" class="range-input" type="range" min="0" max="100" step="1" value="${escapeHtml(layerOffloadTransformer)}" data-sync-group="layer-offload-transformer">
+                  <input id="layer-offloading-transformer" class="range-number" name="layerOffloadingTransformerPercent" type="number" min="0" max="100" value="${escapeHtml(layerOffloadTransformer)}" data-sync-group="layer-offload-transformer">
+                </div>
+                <div class="range-scale"><span>0</span><span>100</span></div>
               </div>
-              <div class="field">
+              <div class="field range-input-block">
                 <label class="field-label" for="layer-offloading-text-encoder">Text Encoder Offload %</label>
-                <input id="layer-offloading-text-encoder" name="layerOffloadingTextEncoderPercent" type="number" min="0" max="100" value="${escapeHtml(layerOffloadTextEncoder)}">
+                <div class="range-input-row">
+                  <input id="layer-offloading-text-encoder-range" class="range-input" type="range" min="0" max="100" step="1" value="${escapeHtml(layerOffloadTextEncoder)}" data-sync-group="layer-offload-text-encoder">
+                  <input id="layer-offloading-text-encoder" class="range-number" name="layerOffloadingTextEncoderPercent" type="number" min="0" max="100" value="${escapeHtml(layerOffloadTextEncoder)}" data-sync-group="layer-offload-text-encoder">
+                </div>
+                <div class="range-scale"><span>0</span><span>100</span></div>
               </div>
-            </div>
-            <div class="field-help">Qwen-Image and Z-Image families in the original UI exposed layer offloading here. This version writes the same config keys.</div>` : ''}
+              <div class="offload-hint">Layer offloading is only expanded when enabled, matching the original simple UI flow more closely.</div>
+            </div>` : ""}
         </div>
 
-        <div class="panel">
+        <div class="panel simple-card simple-target-card">
           <div class="surface-header">
             <h3>Target</h3>
             <span class="badge">LoRA shape</span>
@@ -905,7 +943,7 @@ function renderSimpleJobEditor(editor, settings) {
           <div class="simple-grid-2">
             <div class="field">
               <label class="field-label" for="network-type">Target Type</label>
-              <select id="network-type" name="networkType">
+              <select id="network-type" name="networkType" data-change="simple-editor-refresh">
                 ${renderSelectOptions(TARGET_TYPE_OPTIONS, networkType)}
               </select>
             </div>
@@ -945,7 +983,7 @@ function renderSimpleJobEditor(editor, settings) {
             </div>` : ''}
         </div>
 
-        <div class="panel">
+        <div class="panel simple-card simple-training-card">
           <div class="surface-header">
             <h3>Training</h3>
             <span class="badge warning">Core knobs</span>
@@ -1002,9 +1040,9 @@ function renderSimpleJobEditor(editor, settings) {
           </div>
         </div>
 
-        <div class="panel">
+        <div class="panel simple-card simple-save-card">
           <div class="surface-header">
-            <h3>EMA And Save</h3>
+            <h3>Save</h3>
             <span class="badge info">Training stability</span>
           </div>
           <div class="simple-grid-3">
@@ -1050,7 +1088,7 @@ function renderSimpleJobEditor(editor, settings) {
           </div>
         </div>
 
-        <div class="panel simple-editor-wide">
+        <div class="panel simple-editor-wide simple-dataset-card">
           <div class="surface-header">
             <h3>Dataset</h3>
             <span class="badge">${escapeHtml(String(datasetOptions.length))} presets</span>
@@ -1126,8 +1164,8 @@ function renderSimpleJobEditor(editor, settings) {
           </div>
         </div>
 
-        <div class="hero-panel simple-editor-wide">
-          <div class="hero-line">
+        <div class="panel simple-editor-wide simple-sampling-card">
+          <div class="surface-header">
             <h3>Sampling</h3>
             <span class="badge info">One prompt per line</span>
           </div>
@@ -1201,7 +1239,7 @@ function renderSimpleJobEditor(editor, settings) {
         </div>
 
         ${process.type === 'concept_slider' ? `
-          <div class="panel simple-editor-wide">
+          <div class="panel simple-editor-wide simple-concept-card">
             <div class="surface-header">
               <h3>Concept Slider</h3>
               <span class="badge warning">Slider mode</span>
@@ -1236,11 +1274,6 @@ function renderSimpleJobEditor(editor, settings) {
             </div>
           </div>` : ''}
       </section>
-      <div class="button-row">
-        <button class="button" type="submit" name="submitAction" value="save">Save job</button>
-        <button class="secondary-button" type="submit" name="submitAction" value="queue">Save and run queue</button>
-        <button class="ghost-button" type="button" data-action="load-job-template">Starter template</button>
-      </div>
     </form>
   `;
 }
@@ -1933,24 +1966,112 @@ function renderLogin() {
           <div class="brand-kicker">Protected API</div>
           <h1 style="margin:18px 0 10px; font-size:36px;">AI Toolkit Web</h1>
           <p>The backend checks <span class="mono">AI_TOOLKIT_AUTH</span> on every protected API request. Media routes stay public so logs, samples, and downloads still work once you are in.</p>
-          <p>This replacement UI stores the token only in <span class="mono">localStorage</span> and sends it as a bearer token.</p>
+          <p>This replacement UI stores the password only in <span class="mono">localStorage</span> and sends it as a bearer token after it matches. If your browser autofills it, the page unlocks automatically.</p>
         </div>
         <div class="login-main">
-          <h2>Enter the token</h2>
-          <p>Once it validates, the lightweight static frontend takes over and polls the backend directly.</p>
-          <form id="login-form">
+          <h2>Enter the password</h2>
+          <p>No button or Enter key is required. The page opens as soon as the input matches <span class="mono">AI_TOOLKIT_AUTH</span>.</p>
+          <form id="login-form" autocomplete="on">
+            <input class="login-autofill-helper" type="text" name="username" autocomplete="username" value="AI Toolkit" tabindex="-1" aria-hidden="true">
             <div class="field">
-              <label class="field-label" for="login-token">Token</label>
-              <input id="login-token" type="password" name="token" autocomplete="off" required>
-            </div>
-            <div class="button-row">
-              <button class="button" type="submit">Check token</button>
+              <label class="field-label" for="login-token">Password</label>
+              <input id="login-token" type="password" name="password" autocomplete="current-password" required>
+              <div id="login-status" class="field-help login-status tone-${escapeHtml(loginAutoUnlockStatus.tone)}">${escapeHtml(loginAutoUnlockStatus.message)}</div>
             </div>
           </form>
         </div>
       </div>
     </div>
   `;
+}
+
+function setLoginStatus(message, tone = 'subtle') {
+  loginAutoUnlockStatus = { message, tone };
+  const status = document.getElementById('login-status');
+  if (status instanceof HTMLElement) {
+    status.textContent = message;
+    status.className = `field-help login-status tone-${tone}`;
+  }
+}
+
+function clearLoginAutoUnlockWatch() {
+  if (loginAutoUnlockWatchHandle) {
+    window.clearInterval(loginAutoUnlockWatchHandle);
+    loginAutoUnlockWatchHandle = null;
+  }
+  if (loginAutoUnlockDebounceHandle) {
+    window.clearTimeout(loginAutoUnlockDebounceHandle);
+    loginAutoUnlockDebounceHandle = null;
+  }
+}
+
+function activateLoginAutoUnlock() {
+  clearLoginAutoUnlockWatch();
+  loginAutoUnlockObservedValue = '';
+  setLoginStatus('Type the password to unlock automatically.', 'subtle');
+
+  const inspect = () => {
+    const input = document.getElementById('login-token');
+    if (!(input instanceof HTMLInputElement)) {
+      clearLoginAutoUnlockWatch();
+      return;
+    }
+
+    const currentValue = input.value || '';
+    if (currentValue === loginAutoUnlockObservedValue) {
+      return;
+    }
+
+    loginAutoUnlockObservedValue = currentValue;
+    queueLoginAutoUnlock(currentValue, { silentFailure: true });
+  };
+
+  window.setTimeout(inspect, 0);
+  loginAutoUnlockWatchHandle = window.setInterval(inspect, 250);
+}
+
+function queueLoginAutoUnlock(token, options = {}) {
+  if (loginAutoUnlockDebounceHandle) {
+    window.clearTimeout(loginAutoUnlockDebounceHandle);
+  }
+
+  loginAutoUnlockDebounceHandle = window.setTimeout(() => {
+    void validateLoginPassword(token, options);
+  }, 140);
+}
+
+async function validateLoginPassword(token, options = {}) {
+  const password = String(token ?? '');
+  const attemptNonce = ++loginAttemptNonce;
+
+  if (!password) {
+    localStorage.removeItem('AI_TOOLKIT_AUTH');
+    state.authorized = false;
+    setLoginStatus('Type the password to unlock automatically.', 'subtle');
+    return false;
+  }
+
+  setLoginStatus('Checking password...', 'info');
+  localStorage.setItem('AI_TOOLKIT_AUTH', password);
+  await verifyAuthWithToken(password, { preserveUnauthorizedState: true });
+
+  if (attemptNonce !== loginAttemptNonce) {
+    return false;
+  }
+
+  if (state.authorized) {
+    setLoginStatus('Password accepted. Opening...', 'success');
+    clearLoginAutoUnlockWatch();
+    await refreshRoute();
+    return true;
+  }
+
+  localStorage.removeItem('AI_TOOLKIT_AUTH');
+  state.authorized = false;
+  setLoginStatus(
+    options.silentFailure ? 'Type the password to unlock automatically.' : 'Password does not match.',
+    options.silentFailure ? 'subtle' : 'danger');
+  return false;
 }
 
 function renderLoadingState() {
@@ -2163,20 +2284,7 @@ async function handleAction(action, target) {
 async function handleSubmit(form, submitter) {
   switch (form.id) {
     case 'login-form':
-      await runAction(async () => {
-        const formData = new FormData(form);
-        const token = String(formData.get('token') || '');
-        localStorage.setItem('AI_TOOLKIT_AUTH', token);
-        await verifyAuth();
-        if (!state.authorized) {
-          localStorage.removeItem('AI_TOOLKIT_AUTH');
-          showToast('Token rejected.', 'error');
-          render();
-          return;
-        }
-        showToast('Token accepted.');
-        await refreshRoute();
-      });
+      await validateLoginPassword(String(new FormData(form).get('password') || ''), { silentFailure: false });
       return;
     case 'settings-form':
       await runAction(async () => {
@@ -2434,7 +2542,7 @@ async function fetchText(url, options = {}) {
 async function apiFetch(url, options = {}) {
   const init = { ...options };
   const headers = new Headers(init.headers || {});
-  const token = localStorage.getItem('AI_TOOLKIT_AUTH');
+  const token = options.authToken ?? localStorage.getItem('AI_TOOLKIT_AUTH');
 
   if (!options.allowAnonymous && token) {
     headers.set('Authorization', `Bearer ${token}`);
@@ -2445,10 +2553,14 @@ async function apiFetch(url, options = {}) {
     init.body = JSON.stringify(options.json);
   }
 
+  delete init.json;
+  delete init.allowAnonymous;
+  delete init.authToken;
+  delete init.preserveUnauthorizedState;
   init.headers = headers;
   const response = await fetch(url, init);
 
-  if (response.status === 401) {
+  if (response.status === 401 && !options.preserveUnauthorizedState) {
     localStorage.removeItem('AI_TOOLKIT_AUTH');
     state.authorized = false;
     render();
