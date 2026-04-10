@@ -1672,6 +1672,15 @@ class BaseSDTrainProcess(BaseTrainProcess):
             self.data_loader_reg = get_dataloader_from_datasets(
                 self.datasets_reg, self.train_config.batch_size, self.sd
             )
+            
+        if (
+            use_zimage_cache_bootstrap
+            and not self.train_config.disable_sampling
+            and hasattr(self, "cache_sample_prompts")
+            and self.sd.sample_prompts_cache is None
+        ):
+            print_acc("Pre-caching sample prompts before transformer load")
+            self.cache_sample_prompts()
 
         if (
             use_zimage_cache_bootstrap

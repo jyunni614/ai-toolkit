@@ -256,18 +256,6 @@ class SDTrainer(BaseSDTrainProcess):
             if zimage_preunloaded_te:
                 print_acc("Skipping unconditional embed encode in hook_before_train_loop; text encoder already unloaded after cache")
                 self.unconditional_embeds = None
-
-                if (
-                    not self.train_config.disable_sampling
-                    and self.sample_config is not None
-                    and hasattr(self.sd, "ensure_text_encoder_loaded")
-                    and hasattr(self.sd, "unload_text_encoder_after_cache")
-                    and self.sd.sample_prompts_cache is None
-                ):
-                    print_acc("Pre-caching sample prompts for Z-Image before training loop")
-                    self.sd.ensure_text_encoder_loaded()
-                    self.cache_sample_prompts()
-                    self.sd.unload_text_encoder_after_cache()
             else:
                 kwargs = {}
                 if self.sd.encode_control_in_text_embeddings:
