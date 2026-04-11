@@ -20,6 +20,7 @@ from safetensors.torch import load_file
 
 from transformers import AutoTokenizer, Qwen3ForCausalLM
 from diffusers import AutoencoderKL
+from tqdm import tqdm
 #region 추가
 import gc
 import traceback
@@ -403,6 +404,97 @@ class ZImageModel(BaseModel):
         # tell the model to invert assistant on inference since we want remove lora effects
         self.invert_assistant_lora = True
 
+    def load_transformer_for_sampling(self):
+        dtype = self.torch_dtype
+        load_cfg, load_offload_dir = self._get_load_cfg()
+        _, _, transformer_path, transformer_subfolder = self._resolve_paths()
+
+        self.print_and_status_update("Loading transformer for sampling")
+
+        transformer = ZImageTransformer2DModel.from_pretrained(
+            transformer_path,
+            subfolder=transformer_subfolder,
+            torch_dtype=dtype,
+            offload_state_dict=load_cfg.get("offload_state_dict", True),
+            offload_folder=os.path.join(load_offload_dir, "transformer_sampling"),
+            low_cpu_mem_usage=False,
+        )
+
+        if self.model_config.quantize:
+            self.print_and_status_update("Quantizing sampling transformer")
+            quantize_model(self, transformer)
+            flush()
+
+        transformer.to(self.device_torch, dtype=dtype)
+        transformer.eval()
+        transformer.requires_grad_(False)
+        flush()
+        return transformer
+
+    def _can_use_fast_sampling(self, image_configs, sampler=None, pipeline=None):
+        if pipeline is not None or sampler is not None:
+            return False
+        if self.network is None:
+            return False
+        if self.adapter is not None or self.refiner_unet is not None:
+            return False
+        if self.model_config.assistant_lora_path is not None or self.model_config.inference_lora_path is not None:
+            return False
+        if self.sample_prompts_cache is None:
+            return False
+        if len(image_configs) == 0:
+            return False
+        unique_network_weights = set([x.network_multiplier for x in image_configs])
+        if len(unique_network_weights) != 1:
+            return False
+        return True
+
+    def _create_sampling_network(self, transformer, merge_multiplier: float):
+        if self.network is None:
+            return None
+
+        base_network = unwrap_model(self.network)
+        alpha = getattr(base_network, "alpha", None)
+        if torch.is_tensor(alpha):
+            alpha = alpha.detach().float().item()
+
+        network = LoRASpecialNetwork(
+            text_encoder=None,
+            unet=transformer,
+            lora_dim=base_network.lora_dim,
+            multiplier=merge_multiplier,
+            alpha=alpha,
+            train_unet=True,
+            train_text_encoder=False,
+            network_config=getattr(base_network, "network_config", None),
+            network_type=getattr(base_network, "network_type", "lora"),
+            transformer_only=getattr(base_network, "transformer_only", True),
+            is_transformer=True,
+            target_lin_modules=self.target_lora_modules,
+            is_ara=getattr(base_network, "is_ara", False),
+            base_model=self,
+        )
+        network.apply_to(None, transformer, apply_text_encoder=False, apply_unet=True)
+        network.force_to(self.device_torch, dtype=torch.float32)
+        network.load_weights(base_network.state_dict())
+
+        if network.can_merge_in:
+            network.merge_in(merge_weight=merge_multiplier)
+            network.force_to("cpu", dtype=torch.float32)
+            flush()
+
+        return network
+
+    def _get_cached_sample_prompt_embeds(self, idx: int):
+        cache_item = self.sample_prompts_cache[idx]
+        if "conditional_path" in cache_item:
+            conditional_embeds = PromptEmbeds.load(cache_item["conditional_path"])
+            unconditional_embeds = PromptEmbeds.load(cache_item["unconditional_path"])
+        else:
+            conditional_embeds = cache_item["conditional"]
+            unconditional_embeds = cache_item["unconditional"]
+        return conditional_embeds, unconditional_embeds
+
         # 전체 변경
     def load_model(self, cache_only=False):
         self.load_cache_models()
@@ -429,6 +521,142 @@ class ZImageModel(BaseModel):
         )
 
         return pipeline
+
+    @torch.no_grad()
+    def generate_images(
+        self,
+        image_configs: List[GenerateImageConfig],
+        sampler=None,
+        pipeline=None,
+    ):
+        if not self._can_use_fast_sampling(image_configs, sampler=sampler, pipeline=pipeline):
+            return super().generate_images(image_configs, sampler=sampler, pipeline=pipeline)
+
+        merge_multiplier = image_configs[0].network_multiplier
+        self.print_and_status_update("Generating ZImage samples with dedicated inference transformer")
+
+        rng_state = torch.get_rng_state()
+        cuda_rng_state = torch.cuda.get_rng_state() if torch.cuda.is_available() else None
+
+        self.save_device_state()
+
+        sampling_transformer = None
+        sampling_network = None
+        sampling_pipeline = None
+
+        try:
+            try:
+                self.unet.to("cpu")
+            except Exception:
+                pass
+
+            if self.network is not None:
+                try:
+                    self.network.force_to("cpu", dtype=torch.float32)
+                    if hasattr(self.network, "_update_torch_multiplier"):
+                        self.network._update_torch_multiplier()
+                except Exception:
+                    pass
+
+            gc.collect()
+            torch.cuda.empty_cache()
+            flush()
+
+            self.vae.to(self.device_torch, dtype=self.vae_torch_dtype)
+            self.vae.eval()
+            self.vae.requires_grad_(False)
+
+            sampling_transformer = self.load_transformer_for_sampling()
+            sampling_network = self._create_sampling_network(
+                sampling_transformer,
+                merge_multiplier,
+            )
+
+            scheduler = ZImageModel.get_train_scheduler()
+            te_for_pipeline = None
+            if self.sample_prompts_cache is None:
+                self.ensure_text_encoder_loaded()
+                te_for_pipeline = unwrap_model(self.text_encoder[0])
+            elif self._has_real_text_encoder():
+                te_for_pipeline = unwrap_model(self.text_encoder[0])
+
+            sampling_pipeline = ZImagePipeline(
+                scheduler=scheduler,
+                text_encoder=te_for_pipeline,
+                tokenizer=self.tokenizer[0],
+                vae=unwrap_model(self.vae),
+                transformer=sampling_transformer,
+            )
+
+            try:
+                sampling_pipeline.set_progress_bar_config(disable=True)
+            except Exception:
+                pass
+
+            for i in tqdm(range(len(image_configs)), desc="Generating Images", leave=False):
+                gen_config = image_configs[i]
+                conditional_embeds, unconditional_embeds = self._get_cached_sample_prompt_embeds(i)
+
+                gen_config.post_process_embeddings(
+                    conditional_embeds,
+                    unconditional_embeds,
+                )
+
+                if self.decorator is not None:
+                    conditional_embeds.text_embeds = self.decorator(
+                        conditional_embeds.text_embeds
+                    )
+                    unconditional_embeds.text_embeds = self.decorator(
+                        unconditional_embeds.text_embeds,
+                        is_unconditional=True,
+                    )
+
+                conditional_embeds = conditional_embeds.to(
+                    self.device_torch, dtype=self.unet.dtype
+                )
+                unconditional_embeds = unconditional_embeds.to(
+                    self.device_torch, dtype=self.unet.dtype
+                )
+
+                torch.manual_seed(gen_config.seed)
+                if torch.cuda.is_available():
+                    torch.cuda.manual_seed(gen_config.seed)
+                generator = torch.manual_seed(gen_config.seed)
+
+                img = self.generate_single_image(
+                    sampling_pipeline,
+                    gen_config,
+                    conditional_embeds,
+                    unconditional_embeds,
+                    generator,
+                    {},
+                )
+
+                gen_config.save_image(img, i)
+                gen_config.log_image(img, i)
+                self._after_sample_image(i, len(image_configs))
+
+                del conditional_embeds, unconditional_embeds, img
+                flush()
+
+        finally:
+            if sampling_pipeline is not None:
+                del sampling_pipeline
+            if sampling_network is not None:
+                del sampling_network
+            if sampling_transformer is not None:
+                del sampling_transformer
+
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
+            torch.set_rng_state(rng_state)
+            if cuda_rng_state is not None:
+                torch.cuda.set_rng_state(cuda_rng_state)
+
+            self.restore_device_state()
+            flush()
 
     def generate_single_image(
         self,
